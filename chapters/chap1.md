@@ -8,7 +8,6 @@
 psql -U postgres -p 6543
 ```
 
-
 这里 pg主进程 accept一个新的tcp连接，并fork一个子进程处理这个连接的后续请求。主进程回到 listen, accept, fork 循环。
 
 ```
