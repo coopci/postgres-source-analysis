@@ -1,0 +1,122 @@
+手把手导读postgresql服务器端源代码。 
+本系列的特点:
+1. 所有内容全部原创(当然源代码除外)，用到非原创内容时，尽量做到只给出连接而不引用到正文。 只有当直接引用 会大幅提高阅读流畅度时才会直接引用并注明。
+2. 把重要位置的stack列了出来，方便读者提前在这些位置设置断点。 我本人读复杂系统的源代码的经验是 看到关键位置的stack，对全局形成直观感觉，能够起到事半功倍的效果。
+    除非特别说明，列出的stack都是pg服务器端。
+
+    
+第一章
+
+
+手工操作: 用客户端程序 psql  建立一个新连接。
+
+这里 pg主进程 accept一个新的tcp连接，并fork一个子进程处理这个连接的后续请求。主进程回到 listen, accept, fork 循环。
+>	postgres.exe!BackendStartup(Port * port) Line 4016	C        ==> pid = backend_forkexec(port); 我们需要记住这个pid， 后面要把debugger attach到这进程上。
+ 	postgres.exe!ServerLoop() Line 1712	C
+ 	postgres.exe!PostmasterMain(int argc, char * * argv) Line 1379	C
+ 	postgres.exe!main(int argc, char * * argv) Line 229	C
+
+    
+把debuger  attach 到 上面记下 pid 上，然后从psql 里面 发送一个查询命令，例如 select * from table1 (数据库中不必有叫做table1 的表，我们在这里先看pg 发现表不存在 并返回错误的流程)
+
+>	postgres.exe!secure_raw_read(Port * port, void * ptr, unsigned __int64 len) Line 233	C     这里是从tcp连接接受数据的地方。
+ 	postgres.exe!secure_read(Port * port, void * ptr, unsigned __int64 len) Line 158	C
+ 	postgres.exe!pq_recvbuf() Line 963	C
+ 	postgres.exe!pq_getbyte() Line 1006	C           注意这里。
+ 	postgres.exe!SocketBackend(StringInfoData * inBuf) Line 341	C
+ 	postgres.exe!ReadCommand(StringInfoData * inBuf) Line 514	C
+ 	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4095	C
+ 	postgres.exe!BackendRun(Port * port) Line 4362	C
+ 	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
+ 	postgres.exe!main(int argc, char * * argv) Line 216	C
+
+    支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE] 是接受客户端原始数据的buffer。
+
+回到主线:       qtype是用 pq_getbyte 从 接受buffer里获取的第一个字节。
+>	postgres.exe!SocketBackend(StringInfoData * inBuf) Line 375	C     根据 qtype 来决定之后的路线。如果 qtype==81(也就是'Q') 表示buffer里当前的命令是一个  simple query。  具体的协议规范可以postgresl-10 的官方文档的 52.7节 Message Formats 找到。
+ 	postgres.exe!ReadCommand(StringInfoData * inBuf) Line 514	C
+ 	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4095	C
+ 	postgres.exe!BackendRun(Port * port) Line 4362	C
+ 	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
+ 	postgres.exe!main(int argc, char * * argv) Line 216	C
+ 	[External Code]	
+
+一步一步走到下一个断点:
+    
+>	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4147	C   在这里看到query_string里面就是刚刚从psql发过来的命令。
+ 	postgres.exe!BackendRun(Port * port) Line 4362	C
+ 	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
+ 	postgres.exe!main(int argc, char * * argv) Line 216	C
+
+
+>	postgres.exe!exec_simple_query(const char * query_string) Line 944	C                   这里要调用语法分析器(parser)从原始查询(query_string)生成一个语法树(parsetree_list)
+ 	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
+ 	postgres.exe!BackendRun(Port * port) Line 4362	C
+ 	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
+ 	postgres.exe!main(int argc, char * * argv) Line 216	C
+
+这里的pg_parse_query 返回 parsetree_list 的类型是List*:
+List 的定义在 pg_list.h， 如下:
+typedef struct List
+{
+	NodeTag		type;			/* T_List, T_IntList, or T_OidList */
+	int			length;
+	ListCell   *head;
+	ListCell   *tail;
+} List;
+List 的元素 ListCell类型定义是这样:
+struct ListCell
+{
+	union
+	{
+		void	   *ptr_value;
+		int			int_value;
+		Oid			oid_value;
+	}			data;
+	ListCell   *next;
+};
+发现实际的内容是 void *ptr_value。接下来就需要确定ptr_value实际的类型。
+在 postgres.c:976 发现 RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
+parsetree	0x00000000006366e8 {type=T_RawStmt (226) stmt=0x00000000006365d8 {type=T_SelectStmt (232) } stmt_location=...}	RawStmt *
+
+结构是这样的:
+List* parsetree_list
+           |
+  +--------+
+  |         
+  V
+-----------------------------
+|NodeTag()|length| head|tail|   
+-----------------------------
+                     |
+    +----------------+                 
+    |
+    |    -----------------------  
+    +--->| data/ptr_value| next|   ListCell
+         -----------------------
+                  |         |
+                  |         +--> null
+                  |  ------------------
+                  +->| NodeTag()| stmt|   RawStmt
+                     ------------------
+                                    |     -------------------------
+                                    +---->|NodeTag()|   |   | ....|  SelectStmt
+                                          -------------------------
+                     
+最后这个 SelectStmt 就是我们的查询语句 select * from table1 对应的语法树。用 (SelectStmt*)parsetree->stmt 来Watch 一下
+
+
+
+
+
+
+
+
+
+ 
+
+
+要在vs 2017 里面给 gram.c里面设置断点需要一些小技巧，
+1. src\tools\msvc\clean.bat里面注释掉这一行 if %DIST%==1 if exist src\backend\parser\gram.c del /q src\backend\parser\gram.c 
+2. 
+    
