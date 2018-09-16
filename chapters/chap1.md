@@ -202,6 +202,10 @@ access/common/printtup.c:printtup -> // 把当前要输出的这个TupleTableSlo
                 libpq/pgcomm.c:internal_putbytes ->  // 把上层要输出的字节流 memcpy 到 PqSendBuffer 中，如果PqSendBuffer满了，则调用internal_flush。
                     libpq/pgcomm.c:internal_flush  // 把字节流写入socket。
 ```
-printtup 做的事情是把当前要输出的这个tuple(也就是作为查询结果的一个row)装到一个StringInfo(stringinfo.h)里面，然后 以这个StringInfo 为参数调用pq_endmessage_reuse。这个时候的StringInfo已经和DataRow消息(消息类型是'D'，就是服务器返回给客户端的查询结果)极为类似了，把StringInfo作为DataRow消息输出的具体代码是 libpq/pgcomm.c:socket_putmessage
+在printtup里面，有一个叫做pq_beginmessage_reuse的函数和pq_endmessage_reuse配对出现，它的作用是把StringInfo 重置成类似于初始化的状态，并指明了这个StringInfo 在本次reuse的过程中是准备用来构造什么样的消息。 这个代码结构给我们提供了一个非常方便的线索 —— pq_beginmessage_reuse 作为构造输出消息的起始点，同时也就是pg各种内部逻辑暂时告一段落的位置，所以如果从分析代码结构的角度来考虑pq_beginmessage_reuse是设置断点并观察调用栈的好位置。
+
+
+
+
 
     
