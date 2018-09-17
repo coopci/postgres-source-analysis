@@ -78,7 +78,8 @@ struct ListCell
 在 postgres.c:976 可以发现 RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
 parsetree	0x00000000006366e8 {type=T_RawStmt (226) stmt=0x00000000006365d8 {type=T_SelectStmt (232) } stmt_location=...}	RawStmt *
 
-于是可以划出如下的结构:
+于是可以画出如下的结构:
+```
 List* parsetree_list
            |
   +--------+
@@ -101,7 +102,7 @@ List* parsetree_list
                                     |     -------------------------
                                     +---->|NodeTag()|   |   | ....|  SelectStmt
                                           -------------------------
-                     
+```
 最后这个 SelectStmt 就是我们的查询语句 select * from table1 对应的语法树。用 (SelectStmt*)parsetree->stmt 来Watch 一下就可以大致知道里面有哪些内容。
 两句题外话。这种用nodetag来标记实际类型， 并以此为依据进行指针cast的做法是C语言项目里一种常用的面向对象编程方法。
 其实面向对象语言不外乎是在语法层面通过编译器或者VM替程序员向内存块里嵌入了这种表示类型的tag。
