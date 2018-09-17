@@ -16,7 +16,7 @@ postgres.exe!PostmasterMain(int argc, char * * argv) Line 1379	C
 postgres.exe!main(int argc, char * * argv) Line 229	C
 ```
     
-把debuger  attach 到 上面记下 pid 上，然后从psql 里面 发送一个查询命令，例如 select * from table1 (数据库中不必有叫做table1 的表，我们在这里先看pg 发现表不存在 并返回错误的流程)
+把debuger  attach 到 上面记下 pid 上，然后从psql 里面 发送一个查询命令，例如 select * from table1;
 
 >	postgres.exe!secure_raw_read(Port * port, void * ptr, unsigned __int64 len) Line 233	C     这里是从tcp连接接受数据的地方。
  	postgres.exe!secure_read(Port * port, void * ptr, unsigned __int64 len) Line 158	C
@@ -29,7 +29,7 @@ postgres.exe!main(int argc, char * * argv) Line 229	C
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
 
-    支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE] 是接受客户端原始数据的buffer。
+    支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE]，它 是接受客户端原始数据的buffer。
 
 回到主线:       qtype是用 pq_getbyte 从 接受buffer里获取的第一个字节。
 >	postgres.exe!SocketBackend(StringInfoData * inBuf) Line 375	C     根据 qtype 来决定之后的路线。如果 qtype==81(也就是'Q') 表示buffer里当前的命令是一个  simple query。  具体的协议规范可以postgresl-10 的官方文档的 52.7节 Message Formats 找到。
@@ -74,11 +74,11 @@ struct ListCell
 	}			data;
 	ListCell   *next;
 };
-发现实际的内容是 void *ptr_value。接下来就需要确定ptr_value实际的类型。
-在 postgres.c:976 发现 RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
+发现实际的内容是 void *ptr_value。接下来就需要确定ptr_value的数据类型。
+在 postgres.c:976 可以发现 RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
 parsetree	0x00000000006366e8 {type=T_RawStmt (226) stmt=0x00000000006365d8 {type=T_SelectStmt (232) } stmt_location=...}	RawStmt *
 
-结构是这样的:
+于是可以划出如下的结构:
 List* parsetree_list
            |
   +--------+
@@ -96,7 +96,7 @@ List* parsetree_list
                   |         |
                   |         +--> null
                   |  ------------------
-                  +->| NodeTag()| stmt|   RawStmt
+                  +->| NodeTag()| stmt|   RawStmt  对应代码中的 parsetree 变量。
                      ------------------
                                     |     -------------------------
                                     +---->|NodeTag()|   |   | ....|  SelectStmt
@@ -135,7 +135,7 @@ plantree_list 是 以querytree_list做为输入 进行查询规划后得到的�
 
 
 
-
+下面这个stack是pg在做SeqScan时发现用到的那个页目前还不在共享内存中，从文件读取该页的代码。共享内存和页buffer的组织方式会在第二章做比较详细的分析。
 ```
 >	postgres.exe!ReadBuffer_common(SMgrRelationData * smgr, char relpersistence, ForkNumber forkNum, unsigned int blockNum, ReadBufferMode mode, BufferAccessStrategyData * strategy, bool * hit) Line 788	C
  	postgres.exe!ReadBufferExtended(RelationData * reln, ForkNumber forkNum, unsigned int blockNum, ReadBufferMode mode, BufferAccessStrategyData * strategy) Line 664	C
@@ -161,7 +161,7 @@ plantree_list 是 以querytree_list做为输入 进行查询规划后得到的�
 
 ```
     
-
+下面这个stack顶部的printtup是pg找到一个符合查询条件的row，向客户端输出(存入发送buffer或者调用tcp发送操作)这个row。
 ```
 >	postgres.exe!printtup(TupleTableSlot * slot, _DestReceiver * self) Line 376	C
  	postgres.exe!ExecutePlan(EState * estate, PlanState * planstate, bool use_parallel_mode, CmdType operation, bool sendTuples, unsigned __int64 numberTuples, ScanDirection direction, _DestReceiver * dest, bool execute_once) Line 1756	C
@@ -176,7 +176,7 @@ plantree_list 是 以querytree_list做为输入 进行查询规划后得到的�
  	postgres.exe!main(int argc, char * * argv) Line 216	C
 ```
 
-
+针对我们这个简单的select * 示例，下面的ReadyForQuery是pg服务器在告诉客户端
 ```
 >	postgres.exe!ReadyForQuery(CommandDest dest) Line 259	C   // 向客户端发送ReadyForQuery消息。
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4081	C
@@ -184,28 +184,25 @@ plantree_list 是 以querytree_list做为输入 进行查询规划后得到的�
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
 ```
+在这之间pg服务器还要向客户端发送一个CommandComplete消息，找到发送CommandComplete消息的代码以及stack的位置留给读者作为练习。如果目前没有思路，可以使用1.2节介绍的方法。
 至此，我们已经看过了一个最简单的查询语句的整体执行流程，之后的一部分章节是对这个粗略描述的细化补充。
-
 
 1.2 C/S通信部分的详细分析
 之所以把这个部分的详细分析放到"粗筋"章，有几个原因:
 1. 这个部分相对简单，可以在比较少的篇幅解释清楚。
 2. 这个部分的行为可以从外部观察到(使用wireshark或者tcpdump之类的工具)，或者说pg服务器的所有其他内部逻辑的存在都是为了实现这个通信。 尽快交待清楚可以方便读者使用逆推的方法寻找感兴趣的部分代码。例如 如果想要知道pg是如何计算出一条应该返回给客户端的数据的，那么可以首先在发送DataRow消息(消息类型是'D') 的地方设置断点，然后根据这断点的stack就可以更方便地探索感兴趣的部分。
 
-libpq/pgcomm.c 中的 static char *PqSendBuffer 用来接收来自客户端的数据，  static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE] 用来作为发给客户端数据的buffer。
-这里分析一种PqRecvBuffer的典型用法:
+pg的通信协议以消息(postgresl-10 的官方文档的 52.7节)为最小的语义单位，每个消息的第一个字节都用来表示本消息的类型，第2到第5个字节表示本消息的长度，从第6个字节开始是消息的内容。pg服务器端的代码用StringInfo结构(stringinfo.h)在内存中组装要发送的消息，然后通过pq_endmessage_reuse函数把组装好的StringInfo结构发送给接收方。需要注意的是，消息类型会被存到StringInfo的cursor字段，长度存到len字段，data字段指向的内存是是消息的第6个字节。
+
+libpq/pgcomm.c 中的 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE] 用来接收来自客户端的消息序列，static char *PqSendBuffer 用来作为发给客户端的消息的buffer。
+
+这里分析一种PqSendBuffer的典型用法:
 ```
-access/common/printtup.c:printtup -> // 把当前要输出的这个TupleTableSlot(也就是作为查询结果的一个row)装到一个StringInfo(stringinfo.h)里面，然后 以这个StringInfo 为参数调用pq_endmessage_reuse
+access/common/printtup.c:printtup -> // 把当前要输出的这个TupleTableSlot(也就是作为查询结果的一个row)装到一个StringInfo里面，然后 以这个StringInfo 为参数调用pq_endmessage_reuse
     libpq/pgformat.c:pq_endmessage_reuse -> pq_putmessage(buf->cursor, buf->data, buf->len);
         libpq.h:pq_putmessage -> // 这是个宏，宏定义是PqCommMethods->putmessage函数指针，这个函数指针指向libpq/pgcomm.c:socket_putmessage
             libpq/pgcomm.c:socket_putmessage ->  // 把StringInfo转化为DataRow的形式输出
                 libpq/pgcomm.c:internal_putbytes ->  // 把上层要输出的字节流 memcpy 到 PqSendBuffer 中，如果PqSendBuffer满了，则调用internal_flush。
                     libpq/pgcomm.c:internal_flush  // 把字节流写入socket。
 ```
-在printtup里面，有一个叫做pq_beginmessage_reuse的函数和pq_endmessage_reuse配对出现，它的作用是把StringInfo 重置成类似于初始化的状态，并指明了这个StringInfo 在本次reuse的过程中是准备用来构造什么样的消息。 这个代码结构给我们提供了一个非常方便的线索 —— pq_beginmessage_reuse 作为构造输出消息的起始点，同时也就是pg各种内部逻辑暂时告一段落的位置，所以如果从分析代码结构的角度来考虑pq_beginmessage_reuse是设置断点并观察调用栈的好位置。
-
-
-
-
-
-    
+在printtup里面，有一个叫做pq_beginmessage_reuse的函数和pq_endmessage_reuse配对出现，它的作用是把StringInfo 重置成类似于初始化的状态(len字段设置为0)，并指明了这个StringInfo 在本次reuse的过程中是准备用来构造什么类型的消息(设置cursor字段)。 这个代码结构给我们提供了一个非常方便的线索 —— socket_putmessage 作为构造输出消息的起始点，同时也就是pg各种内部逻辑暂时告一段落的位置。所以如果从分析代码结构的角度来考虑，socket_putmessage 是设置断点并观察调用栈的好位置。
