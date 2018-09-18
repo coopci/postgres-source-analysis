@@ -207,3 +207,5 @@ access/common/printtup.c:printtup -> // 把当前要输出的这个TupleTableSlo
                     libpq/pgcomm.c:internal_flush  // 把字节流写入socket。
 ```
 在printtup里面，有一个叫做pq_beginmessage_reuse的函数和pq_endmessage_reuse配对出现，它的作用是把StringInfo 重置成类似于初始化的状态(len字段设置为0)，并指明了这个StringInfo 在本次reuse的过程中是准备用来构造什么类型的消息(设置cursor字段)。 这个代码结构给我们提供了一个非常方便的线索 —— socket_putmessage 作为构造输出消息的起始点，同时也就是pg各种内部逻辑暂时告一段落的位置。所以如果从分析代码结构的角度来考虑，socket_putmessage 是设置断点并观察调用栈的好位置。
+
+[下一章](chap2.md)
