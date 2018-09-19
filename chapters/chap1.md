@@ -17,7 +17,7 @@ postgres.exe!main(int argc, char * * argv) Line 229	C
 ```
     
 把debuger  attach 到 上面记下 pid 上，然后从psql 里面 发送一个查询命令，例如 select * from table1;
-
+```
 >	postgres.exe!secure_raw_read(Port * port, void * ptr, unsigned __int64 len) Line 233	C     这里是从tcp连接接受数据的地方。
  	postgres.exe!secure_read(Port * port, void * ptr, unsigned __int64 len) Line 158	C
  	postgres.exe!pq_recvbuf() Line 963	C
@@ -28,8 +28,9 @@ postgres.exe!main(int argc, char * * argv) Line 229	C
  	postgres.exe!BackendRun(Port * port) Line 4362	C
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
+```
 
-    支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE]，它 是接受客户端原始数据的buffer。
+支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE]，它 是接受客户端原始数据的buffer。
 
 回到主线:       qtype是用 pq_getbyte 从 接受buffer里获取的第一个字节。
 >	postgres.exe!SocketBackend(StringInfoData * inBuf) Line 375	C     根据 qtype 来决定之后的路线。如果 qtype==81(也就是'Q') 表示buffer里当前的命令是一个  simple query。  具体的协议规范可以postgresl-10 的官方文档的 52.7节 Message Formats 找到。
@@ -56,6 +57,7 @@ postgres.exe!main(int argc, char * * argv) Line 229	C
 
 这里的pg_parse_query 返回 parsetree_list 的类型是List*:
 List 的定义在 pg_list.h， 如下:
+```
 typedef struct List
 {
 	NodeTag		type;			/* T_List, T_IntList, or T_OidList */
@@ -63,7 +65,9 @@ typedef struct List
 	ListCell   *head;
 	ListCell   *tail;
 } List;
+```
 List 的元素 ListCell类型定义是这样:
+```
 struct ListCell
 {
 	union
@@ -74,9 +78,14 @@ struct ListCell
 	}			data;
 	ListCell   *next;
 };
+```
 发现实际的内容是 void *ptr_value。接下来就需要确定ptr_value的数据类型。
-在 postgres.c:976 可以发现 RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
+在 postgres.c:976 可以发现: 
+
+```
+RawStmt *parsetree = lfirst_node(RawStmt, parsetree_item);
 parsetree	0x00000000006366e8 {type=T_RawStmt (226) stmt=0x00000000006365d8 {type=T_SelectStmt (232) } stmt_location=...}	RawStmt *
+```
 
 于是可以画出如下的结构:
 ```
