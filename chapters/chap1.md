@@ -33,6 +33,7 @@ postgres.exe!main(int argc, char * * argv) Line 229	C
 支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE]，它 是接受客户端原始数据的buffer。
 
 回到主线:       qtype是用 pq_getbyte 从 接受buffer里获取的第一个字节。
+```
 >	postgres.exe!SocketBackend(StringInfoData * inBuf) Line 375	C     根据 qtype 来决定之后的路线。如果 qtype==81(也就是'Q') 表示buffer里当前的命令是一个  simple query。  具体的协议规范可以postgresl-10 的官方文档的 52.7节 Message Formats 找到。
  	postgres.exe!ReadCommand(StringInfoData * inBuf) Line 514	C
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4095	C
@@ -40,20 +41,22 @@ postgres.exe!main(int argc, char * * argv) Line 229	C
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
  	[External Code]	
-
+```
 一步一步走到下一个断点:
-    
+```    
 >	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4147	C   在这里看到query_string里面就是刚刚从psql发过来的命令。
  	postgres.exe!BackendRun(Port * port) Line 4362	C
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
+```
 
-
+```
 >	postgres.exe!exec_simple_query(const char * query_string) Line 944	C                   这里要调用语法分析器(parser)从原始查询(query_string)生成一个语法树(parsetree_list)
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
  	postgres.exe!BackendRun(Port * port) Line 4362	C
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
+```
 
 这里的pg_parse_query 返回 parsetree_list 的类型是List*:
 List 的定义在 pg_list.h， 如下:
@@ -120,13 +123,14 @@ List* parsetree_list
 querytree_list 是 应用了rewrite 规则后得到结果。例如把针对视图的查询分解成针对相应表的查询就是一种rewrite规则。
 plantree_list 是 以querytree_list做为输入 进行查询规划后得到的结果。所谓的查询优化就是在这个步骤完成的。
 我们可以直接看到这两个list都是分别只有一个元素(head和tail相同)。
+```
 >	postgres.exe!exec_simple_query(const char * query_string) Line 1054	C
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
  	postgres.exe!BackendRun(Port * port) Line 4362	C
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
  	[External Code]	
-    
+```    
 有了之前看parsetree的经验，我们可以用这两个watch:
 ```
 (Node*)(plantree_list->head->data.ptr_value)
