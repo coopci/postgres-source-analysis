@@ -190,7 +190,7 @@ plantree_list 是 以querytree_list做为输入 进行查询规划后得到的�
  	postgres.exe!main(int argc, char * * argv) Line 216	C
 ```
 
-针对我们这个简单的select * 示例，下面的ReadyForQuery是pg服务器在告诉客户端
+针对我们这个简单的select * 示例，下面的ReadyForQuery是pg服务器在告诉客户端“之前的请求都处理完了，现在可以发送新的请求了”。
 ```
 >	postgres.exe!ReadyForQuery(CommandDest dest) Line 259	C   // 向客户端发送ReadyForQuery消息。
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4081	C
