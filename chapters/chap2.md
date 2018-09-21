@@ -25,19 +25,19 @@ shmem.c 中定义的两个函数 ShmemInitStruct 和 ShmemInitHash 是用来从�
 
 对于特殊的"ShmemIndex"，除了全局变量ShmemIndex之外，"ShmemIndex"的地址还会被存到ShmemSegHdr->index里。
 
-整个共享内存区域由这全局变量 static PGShmemHeader *ShmemSegHdr 维护。 
-PGSharedMemoryCreate 函数调用系统调用分配整个共享内存区域，这个函数是操作系统相关的，所以针对不同操作有多个版本。 
-用 PGSharedMemoryCreate 分配得到的整个内存区域会由InitShmemAccess关联到对应的全局变量上面。
+整个共享内存区域由这全局变量 static PGShmemHeader *ShmemSegHdr 维护。 pg是在主进程启动时就把整个共享内存区域分配好，之后都是从这个一次性分配好的区域种一块一块地分配给不同的共享数据结构，这个区域大小的计算和分配都在CreateSharedMemoryAndSemaphores函数中。在CreateSharedMemoryAndSemaphores里面，PGSharedMemoryCreate 函数调用系统调用按计算好的总大小分配整个共享内存区域，这个函数是操作系统相关的，所以针对不同操作有多个版本。 用 PGSharedMemoryCreate 分配得到的整个内存区域会由InitShmemAccess关联到全局变量static PGShmemHeader *ShmemSegHdr上面。
 
-"ShmemIndex" 的初始化由InitShmemIndex函数开始:
+在完成ShmemSegHdr的初始化之后，就要建立"ShmemIndex"，"ShmemIndex" 的初始化由InitShmemIndex函数开始:
 ```
 ShmemIndex = ShmemInitHash("ShmemIndex",
 							   SHMEM_INDEX_SIZE, SHMEM_INDEX_SIZE,
 							   &info, hash_flags);
 ```
 
-最终也在ShmemInitStruct里面:
+最终也在ShmemInitStruct里面，ShmemInitStruct需要用到已经初始化好的全局变量static PGShmemHeader *ShmemSegHdr:
 ```
+PGShmemHeader *shmemseghdr = ShmemSegHdr;
+...
 structPtr = ShmemAlloc(size); 
 shmemseghdr->index = structPtr; 
 ```
