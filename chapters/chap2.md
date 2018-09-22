@@ -7,7 +7,7 @@ pg的数据文件和索引文件都被划分成固定大小的页(典型的页�
 
 多进程共享相同的数据区域，自然要考虑同步的问题，不过在这一章我们先把关注点放在数据操作上面，后面用单独的章节分析pg中同步多个子进程的手段。
 
-2.1 共享内存
+### 2.1 共享内存
 
 shmem.c 文件开头的注释对共享内存的使用方法有个大致的说明，这段说明已经把pg中使用共享内存的大原则解释得很明确。
 从设计上说有三个重要原则:
@@ -61,9 +61,9 @@ ShmemInitStruct 会根据name去ShmemIndex寻找当前要分配的数据结构�
 ShmemInitHash 会调用ShmemInitStruct来分配或者attach到已经分配的数据结构上。并在分配结果上创建hash table结构（通过调用hash_create）。后面会有专门分析pg中hash table的章节。 
 
 
-2.2 页buffer
+### 2.2 页buffer
 本章对pg中使用共享内存的方法做了大致的说明，下一章我们结合共享内存中的"Buffer Descriptors"结构和"Buffer Blocks"结构，对第一章中提到的seqscan做更细致的分析。
 
-2.3 SeqScan
+### 2.3 SeqScan
 
 
