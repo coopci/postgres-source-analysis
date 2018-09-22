@@ -63,7 +63,18 @@ main.c:main
 ```
 
 ### 2.2 页buffer
-本章对pg中使用共享内存的方法做了大致的说明，下一章我们结合共享内存中的"Buffer Descriptors"结构和"Buffer Blocks"结构，对第一章中提到的seqscan做更细致的分析。
+#### BLCKSZ，shared_buffers和NBuffers
+有三个数字用来确定页buffer的布局:
+    1. BLCKSZ，这是个宏定义，用来指定一页的大小，默认是8192字节。可以在编译pg的时候的自定义。
+    2. shared_buffers， 这个是 postgresql.conf里面的一个配置项，用来告诉pg我们希望总共用多少共享内存来作为页buffer。可以在启动pg主进程之前指定，如果要改的话需要重启pg主进程。
+    3. NBuffers = shared_buffers / BLCKSZ。 代码中的一个全局变量，记录内存中同时最多可以把多少个页放到buffer里面。
+
+pg里面用三个共享数据结构来维护数据文件的页在内存中的影射，分别是:
+  1. BufferBlocks "Buffer Blocks"               长度固定是NBuffers的数组，每一项都是一个数据页(长度是BLCKSZ字节)。
+  2. BufferDescriptors "Buffer Descriptors"     长度固定是NBuffers的数组，数组元素的类型是 BufferDescPadded。 这个数组中的元素和BufferBlocks中的元素是一一对应的，也就是说BufferDescriptors[i]是对BufferBlocks[i]的描述。
+  3. SharedBufHash   "Shared Buffer Lookup Table"  最多有 NBuffers + NUM_BUFFER_PARTITIONS(128) 个key 的 hash table,  key的类型是BufferTag，value的类型是BufferLookupEnt。这个hash table 用来记录特定的页在上述两个数组中的位置。目前可以认为作为key的BufferTag指明了某某表的第几个页。
+
+
 
 ### 2.3 SeqScan
 
