@@ -17,7 +17,7 @@ postgres.exe!ServerLoop() Line 1712	C
 postgres.exe!PostmasterMain(int argc, char * * argv) Line 1379	C
 postgres.exe!main(int argc, char * * argv) Line 229	C
 ```
-    
+
 把debuger  attach 到 上面记下 pid 上，然后从psql 里面 发送一个查询命令，例如 select * from table1;
 ```
 >	postgres.exe!secure_raw_read(Port * port, void * ptr, unsigned __int64 len) Line 233	C     这里是从tcp连接接受数据的地方。

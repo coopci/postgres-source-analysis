@@ -25,7 +25,20 @@ shmem.c 中定义的两个函数 ShmemInitStruct 和 ShmemInitHash 是用来从�
 
 对于特殊的"ShmemIndex"，除了全局变量ShmemIndex之外，"ShmemIndex"的地址还会被存到ShmemSegHdr->index里。
 
-整个共享内存区域由这全局变量 static PGShmemHeader *ShmemSegHdr 维护。 pg是在主进程启动时就把整个共享内存区域分配好，之后都是从这个一次性分配好的区域种一块一块地分配给不同的共享数据结构，这个区域大小的计算和分配都在CreateSharedMemoryAndSemaphores函数中。在CreateSharedMemoryAndSemaphores里面，PGSharedMemoryCreate 函数调用系统调用按计算好的总大小分配整个共享内存区域，这个函数是操作系统相关的，所以针对不同操作有多个版本。 用 PGSharedMemoryCreate 分配得到的整个内存区域会由InitShmemAccess关联到全局变量static PGShmemHeader *ShmemSegHdr上面。
+整个共享内存区域由这全局变量 static PGShmemHeader *ShmemSegHdr 维护。 pg是在主进程启动时就把整个共享内存区域分配好，之后都是从这个一次性分配好的区域中一块一块地分配内存给不同的共享数据结构。各个处理客户端请求的子进程需要attach到由主进程分配的共享区域以及各种共享数据结构。 EXEC_BACKEND的情况(windows平台一定是EXEC_BACKEND)比较复杂，这种模式下子进程不直接继承这些存放共享内存的全局变量，所以pg的代码要在子进程中建立和主进程相同的共享数据结构。做法大致是这样: 将共享内存的句柄(handle)和共享内区域的地址分别保存在全局变量UsedShmemSegID和UsedShmemSegAddr中。主进程为了向子进程传递这些信息(在BackendParameters结构中定义了所有需要通过这种手段共享的信息，包含但不只UsedShmemSegID和UsedShmemSegAddr)，要单独建立一个临时的共享内区域，通过save_backend_variables函数把BackendParameters的内容拷贝到临时共享区域中，并把临时共享区域的句柄以ascii的形式通过fork命令行参数穿给子进程。在子进程中恢复信息的流程如下:
+```
+main.c:main
+    postgres.c:SubPostmasterMain 
+        postgres.c:read_backend_variables   从命令参数影射临时共享区域到局部变量BackendParameters param，并以param为参数调用restore_backend_variables。
+            postgres.c:restore_backend_variables   从param恢复 UsedShmemSegID，UsedShmemSegAddr 等全局变量。
+        postgres.c:PGSharedMemoryReAttach    以restore_backend_variables恢复得到的 UsedShmemSegID，UsedShmemSegAddr 作为参数将主共享区域影射到本进程的地址空间。
+        shmem.c:InitShmemAccess  用UsedShmemSegAddr恢复ShmemSegHdr，ShmemBase和ShmemEnd。
+        ipci.c:CreateSharedMemoryAndSemaphores  把表示各个共享数据结构的全局变量attach到从ShmemSegHdr指出的主共享区的相应位置。
+
+```
+
+
+这个区域总大小的计算和分配都在CreateSharedMemoryAndSemaphores函数中。在CreateSharedMemoryAndSemaphores里面，PGSharedMemoryCreate 函数调用系统调用按计算好的总大小分配整个共享内存区域，这个函数是操作系统相关的，所以针对不同操作有多个版本。 用 PGSharedMemoryCreate 分配得到的整个内存区域会由InitShmemAccess关联到全局变量static PGShmemHeader *ShmemSegHdr上面。
 
 在完成ShmemSegHdr的初始化之后，就要建立"ShmemIndex"，"ShmemIndex" 的初始化由InitShmemIndex函数开始:
 ```
