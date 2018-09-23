@@ -70,9 +70,63 @@ main.c:main
     3. NBuffers = shared_buffers / BLCKSZ。 代码中的一个全局变量，记录内存中同时最多可以把多少个页放到buffer里面。
 
 pg里面用三个共享数据结构来维护数据文件的页在内存中的影射，分别是:
-  1. BufferBlocks "Buffer Blocks"               长度固定是NBuffers的数组，每一项都是一个数据页(长度是BLCKSZ字节)。
+  1. BufferBlocks "Buffer Blocks"               长度固定是NBuffers的数组，每一项都是一个数据页(长度是BLCKSZ字节)。每个页内部的布局在官方文档66.6Database Page Layout有详细描述。
   2. BufferDescriptors "Buffer Descriptors"     长度固定是NBuffers的数组，数组元素的类型是 BufferDescPadded。 这个数组中的元素和BufferBlocks中的元素是一一对应的，也就是说BufferDescriptors[i]是对BufferBlocks[i]的描述。
-  3. SharedBufHash   "Shared Buffer Lookup Table"  最多有 NBuffers + NUM_BUFFER_PARTITIONS(128) 个key 的 hash table,  key的类型是BufferTag，value的类型是BufferLookupEnt。这个hash table 用来记录特定的页在上述两个数组中的位置。目前可以认为作为key的BufferTag指明了某某表的第几个页。
+  3. SharedBufHash   "Shared Buffer Lookup Table"  最多有 NBuffers + NUM_BUFFER_PARTITIONS(128) 个key 的 hash table,  key的类型是BufferTag，value的类型是BufferLookupEnt。这个hash table 用来记录特定的页在上述两个数组中的位置。可以认为BufferTag指明一个页在文件系统中的位置，BufferLookupEnt.id则指出了该页在内存buffer中的位置。
+```
+// SharedBufHash 值的类型
+typedef struct
+{
+	BufferTag	key;			/* Tag of a disk page */
+	int			id;				/* Associated buffer ID */  // 也就是BufferBlocks和BufferDescriptors数组的下标。
+} BufferLookupEnt;
+```
+
+另有两个辅助的共享数据结构:
+1. BufferIOLWLockArray  "Buffer IO Locks"  长度固定是NBuffers的数组，每一项都是一个专门用来同步对buffer做io的锁。
+2. CkptBufferIds        "Checkpoint BufferIds"   长度固定是NBuffers的数组，用来在checkpoint时给buffer排序。
+
+#### BufferDescriptors
+BufferDescriptors元素内部的内存布局又下面两个结构定义。
+```
+typedef struct BufferDesc
+{
+	BufferTag	tag;			/* ID of page contained in buffer */
+	int			buf_id;			/* buffer's index number (from 0) */
+
+	/* state of the tag, containing flags, refcount and usagecount */
+	pg_atomic_uint32 state;          // 高10位是10个标志位，其中的 BM_LOCKED 位用来同步对 tag, state, wait_backend_pid的访问。 
+
+	int			wait_backend_pid;	/* backend PID of pin-count waiter */
+	int			freeNext;		/* link in freelist chain */    // 用StrategyControl->buffer_strategy_lock同步，而不需要BM_LOCKED。
+
+	LWLock		content_lock;	/* to lock access to buffer contents */  // 用来同步对对应的BufferBlocks的访问。
+} BufferDesc;
+
+typedef union BufferDescPadded
+{
+	BufferDesc	bufferdesc;
+	char		pad[BUFFERDESC_PAD_TO_SIZE];
+} BufferDescPadded;
+
+```
+其中state的高10位是10个标志位:
+1. BM_LOCKED(1U << 22) 位用来同步对 tag, state, wait_backend_pid的访问。
+2. BM_DIRTY(1U << 23)	/* data needs writing */
+3. BM_VALID				(1U << 24)	文件系统中的页已经读到和本BufferDesc对应的BufferBlocks元素中了。
+4. BM_TAG_VALID			(1U << 25)	tag字段已经赋值过了。
+5. BM_IO_IN_PROGRESS		(1U << 26)	正在读入内存或者写入文件系统。
+6. BM_IO_ERROR				(1U << 27)	上一次I/O操所失败了。
+7. BM_JUST_DIRTIED			(1U << 28)	/* dirtied since write started */
+8. BM_PIN_COUNT_WAITER		(1U << 29)	/* have waiter for sole pin */
+9. BM_CHECKPOINT_NEEDED	    (1U << 30)	/* must write for checkpoint */
+10. BM_PERMANENT			(1U << 31)	/* permanent buffer (not unlogged,  or init fork) */
+                            
+
+次高4位是usage_count用于clock sweeps算法寻找可以被evict的页。低18位是refcount用来记录。
+
+#### SharedBufHash
+这个hash table 的key数量比较大，而且访问频繁，pg对此作了一个优化——把它的key空间分成NUM_BUFFER_PARTITIONS(宏定义，默认128)个partition。当需要对某一个key(BufferTag)进行操作时，pg的上锁粒度都是该key所属的partition(计算所属partition的宏是BufTableHashPartition)。
 
 
 
