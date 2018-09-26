@@ -123,14 +123,26 @@ typedef union BufferDescPadded
 10. BM_PERMANENT			(1U << 31)	/* permanent buffer (not unlogged,  or init fork) */
                             
 
-次高4位是usage_count用于clock sweeps算法寻找可以被evict的页。低18位是refcount用来记录。
-###### BM_LOCKED 和 spin+cas
+次高4位是usage_count，可以理解成是在最近一小段时间只能对这个页使用的热度，用于clock sweeps算法寻找可以被evict的页。低18位是refcount用来精确记录正在引用(PinBuffer)这个页的进程个数。
+
 
 ##### SharedBufHash
-这个hash table 的key数量比较大，而且访问频繁，pg对此作了一个优化——把它的key空间分成NUM_BUFFER_PARTITIONS(宏定义，默认128)个partition。当需要对某一个key(BufferTag)进行操作时，pg的上锁粒度都是该key所属的partition(计算所属partition的宏是BufTableHashPartition)。
+这个hash table的key数量比较大(NBuffers + NUM_BUFFER_PARTITIONS 个)，而且需要频繁被多进程访问，pg对此作了一个优化——把它的key空间分成NUM_BUFFER_PARTITIONS(宏定义，默认128)个partition。当需要对某一个key(BufferTag)进行操作时，pg的上锁粒度都是该key所属的partition(计算所属partition的宏是BufTableHashPartition)。
+
+
+##### 把一个数据文件的页读入buffer
+把一个数据文件的页读入buffer(把页的内容从文件原样读入BufferBlocks, 并把 BufferDescriptors和SharedBufHash相应的元素设置正确)的逻辑在bufmgr.c:ReadBuffer_common函数里面实现。"把页读入内存buffer"这件事被分成了两个步骤来做，第一步是找到一个可用的buffer(也就是BufferBlocks数组下标和BufferDescriptors数组下标)，这个步骤由bufmgr.c:BufferAlloc函数实现。第二步是实际进行IO操作把页的内容读入第一步得到buffer中并把BufferDescriptors和SharedBufHash相应的元素设置好。如果要读的这页数据已经在buffer里面了(我们称之为命中buffer)，那么这种情况会模糊两步之间的界限——BufferAlloc通过bool *foundPtr指出是否命中buffer，ReadBuffer_common只有在没有命中buffer的情况下才需要进行IO操作读取该页的内容。
+先来分析第一步BufferAlloc。第一步可能有四种结果:
+1. 命中buffer——要找的页已经在buffer中。这是最理想的情况。
+2. 在1不成立的情况下，可以freelist(StrategyControl->firstFreeBuffer)中拿出一个空闲的页。这是次理想的情况。
+3. 在1和2都不成的情况下，找到一个refcount(BufferDesc.state的低18位)是0，并且usage_count也可以降到0的页。
+4. 1,2,3都不成立，直接退出子进程，停止对该客户端继续进行服务。
+
+
+#### clock sweep
 
 
 
 ### 2.3 SeqScan
 
-
+heapam.c:heapgetpage函数上设置断点。
