@@ -68,11 +68,11 @@ main.c:main
     1. BLCKSZ，这是个宏定义，用来指定一页的大小，默认是8192字节。可以在编译pg的时候的自定义。
     2. shared_buffers， 这个是 postgresql.conf里面的一个配置项，用来告诉pg我们希望总共用多少共享内存来作为页buffer。可以在启动pg主进程之前指定，如果要改的话需要重启pg主进程。
     3. NBuffers = shared_buffers / BLCKSZ。 代码中的一个全局变量，记录内存中同时最多可以把多少个页放到buffer里面。
-
+#### 与页buffer相关的共享数据结构
 pg里面用三个共享数据结构来维护数据文件的页在内存中的影射，分别是:
-  1. BufferBlocks "Buffer Blocks"               长度固定是NBuffers的数组，每一项都是一个数据页(长度是BLCKSZ字节)。每个页内部的布局在官方文档66.6Database Page Layout有详细描述。
-  2. BufferDescriptors "Buffer Descriptors"     长度固定是NBuffers的数组，数组元素的类型是 BufferDescPadded。 这个数组中的元素和BufferBlocks中的元素是一一对应的，也就是说BufferDescriptors[i]是对BufferBlocks[i]的描述。
-  3. SharedBufHash   "Shared Buffer Lookup Table"  最多有 NBuffers + NUM_BUFFER_PARTITIONS(128) 个key 的 hash table,  key的类型是BufferTag，value的类型是BufferLookupEnt。这个hash table 用来记录特定的页在上述两个数组中的位置。可以认为BufferTag指明一个页在文件系统中的位置，BufferLookupEnt.id则指出了该页在内存buffer中的位置。
+1. BufferBlocks "Buffer Blocks"               长度固定是NBuffers的数组，每一项都是一个数据页(长度是BLCKSZ字节)。每个页内部的布局在官方文档66.6Database Page Layout有详细描述。
+2. BufferDescriptors "Buffer Descriptors"     长度固定是NBuffers的数组，数组元素的类型是 BufferDescPadded。 这个数组中的元素和BufferBlocks中的元素是一一对应的，也就是说BufferDescriptors[i]是对BufferBlocks[i]的描述。
+3. SharedBufHash   "Shared Buffer Lookup Table"  最多有 NBuffers + NUM_BUFFER_PARTITIONS(128) 个key 的 hash table,  key的类型是BufferTag，value的类型是BufferLookupEnt。这个hash table 用来记录特定的页在上述两个数组中的位置。可以认为BufferTag指明一个页在文件系统中的位置，BufferLookupEnt.id则指出了该页在内存buffer中的位置。
 ```
 // SharedBufHash 值的类型
 typedef struct
@@ -86,7 +86,7 @@ typedef struct
 1. BufferIOLWLockArray  "Buffer IO Locks"  长度固定是NBuffers的数组，每一项都是一个专门用来同步对buffer做io的锁。
 2. CkptBufferIds        "Checkpoint BufferIds"   长度固定是NBuffers的数组，用来在checkpoint时给buffer排序。
 
-#### BufferDescriptors
+##### BufferDescriptors
 BufferDescriptors元素内部的内存布局又下面两个结构定义。
 ```
 typedef struct BufferDesc
@@ -124,8 +124,9 @@ typedef union BufferDescPadded
                             
 
 次高4位是usage_count用于clock sweeps算法寻找可以被evict的页。低18位是refcount用来记录。
+###### BM_LOCKED 和 spin+cas
 
-#### SharedBufHash
+##### SharedBufHash
 这个hash table 的key数量比较大，而且访问频繁，pg对此作了一个优化——把它的key空间分成NUM_BUFFER_PARTITIONS(宏定义，默认128)个partition。当需要对某一个key(BufferTag)进行操作时，pg的上锁粒度都是该key所属的partition(计算所属partition的宏是BufTableHashPartition)。
 
 
