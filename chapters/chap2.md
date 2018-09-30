@@ -134,9 +134,79 @@ typedef union BufferDescPadded
 把一个数据文件的页读入buffer(把页的内容从文件原样读入BufferBlocks, 并把 BufferDescriptors和SharedBufHash相应的元素设置正确)的逻辑在bufmgr.c:ReadBuffer_common函数里面实现。"把页读入内存buffer"这件事被分成了两个步骤来做，第一步是找到一个可用的buffer(也就是BufferBlocks数组下标和BufferDescriptors数组下标)，这个步骤由bufmgr.c:BufferAlloc函数实现。第二步是实际进行IO操作把页的内容读入第一步得到buffer中并把BufferDescriptors和SharedBufHash相应的元素设置好。如果要读的这页数据已经在buffer里面了(我们称之为命中buffer)，那么这种情况会模糊两步之间的界限——BufferAlloc通过bool *foundPtr指出是否命中buffer，ReadBuffer_common只有在没有命中buffer的情况下才需要进行IO操作读取该页的内容。
 先来分析第一步BufferAlloc。第一步可能有四种结果:
 1. 命中buffer——要找的页已经在buffer中。这是最理想的情况。
-2. 在1不成立的情况下，可以freelist(StrategyControl->firstFreeBuffer)中拿出一个空闲的页。这是次理想的情况。
+2. 在1不成立的情况下，可以从freelist(StrategyControl->firstFreeBuffer)中拿出一个空闲的页。这是次理想的情况。
 3. 在1和2都不成的情况下，找到一个refcount(BufferDesc.state的低18位)是0，并且usage_count也可以降到0的页。
 4. 1,2,3都不成立，直接退出子进程，停止对该客户端继续进行服务。
+
+命中buffer的情况:
+```
+在bufmgr.c:BufferAlloc函数中:
+
+LWLockAcquire(newPartitionLock, LW_SHARED);    // 以 shared 模式 锁住 SharedBufHash 中BufferTag所在的partition     这个锁本身是在共享结构MainLWLockArray中。 newPartitionLock锁和SharedBufHash并没有固有的内在联系，只是pg中对进行SharedBufHash访问时都要确保正确锁住了partition。整个pg代码中对共享数据结构的使用风格都是如此——访问共享数据结构的代码负责保证用正确的方式上锁，而不是在对共享数据结构操作的函数内部上锁。
+buf_id = BufTableLookup(&newTag, newHash);    // 从SharedBufHash找到要读取的页。
+if(buf_id) {
+    buf = GetBufferDescriptor(buf_id);  
+    valid = PinBuffer(buf, strategy);   
+    LWLockRelease(newPartitionLock);  // 释放针对SharedBufHash的partition的锁。
+    *foundPtr = true;
+    if (!valid) {
+        if (StartBufferIO(buf, true))  // 这里处理一种比较巧合的并发状况，源代码中的注释解释得比较清楚。
+        {
+            *foundPtr = false;
+        }
+	}
+    return buf;     // 返回找到的BufferDesc *。
+}
+```
+
+没有命中buffer，但是可以从freelist中拿到空闲buffer的情况:
+```
+在freelist.c:StrategyGetBuffer函数中:
+
+if (StrategyControl->firstFreeBuffer >= 0)
+	{
+		while (true)
+		{
+			
+			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);  // 这个锁保护的是StrategyControl
+
+			if (StrategyControl->firstFreeBuffer < 0)     // two-phase lock 模式。
+			{
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+				break;
+			}
+
+			buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);   // 从这里可以看出StrategyControl->firstFreeBuffer是BufferDescriptors数组的下标。
+			Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+
+			StrategyControl->firstFreeBuffer = buf->freeNext;   //  把freelist里的第一个元素拿掉了。
+			buf->freeNext = FREENEXT_NOT_IN_LIST;
+
+			
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);  // 后面不再访问StrategyControl，所以这里就可以释放buffer_strategy_lock了。
+
+			/*
+			 * If the buffer is pinned or has a nonzero usage_count, we cannot
+			 * use it; discard it and retry.  (This can only happen if VACUUM
+			 * put a valid buffer in the freelist and then someone else used
+			 * it before we got to it.  It's probably impossible altogether as
+			 * of 8.3, but we'd better check anyway.)
+			 */
+			local_buf_state = LockBufHdr(buf);    //  获取buf的BM_LOCKED锁，并返回BM_LOCKED置成1后的buf->state。 buf的类型是BufferDesc* 。
+			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
+				&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)   // 再检查一次确保没有被其他进程用着。其实从上面的锁来看，这个if条件应该总是成立的，根据上面的注释佐证了这一点，这个if判断从8.3开始其实就不需要了。
+			{
+				if (strategy != NULL)
+					AddBufferToRing(strategy, buf);
+				*buf_state = local_buf_state;
+				return buf;    // 注意这里返回的时候buf的BM_LOCKED锁还锁着。
+			}
+			UnlockBufHdr(buf, local_buf_state);
+		}
+	}
+```
+
+
 
 
 #### clock sweep
