@@ -149,8 +149,8 @@ if(buf_id) {
     valid = PinBuffer(buf, strategy);   
     LWLockRelease(newPartitionLock);  // 释放针对SharedBufHash的partition的锁。
     *foundPtr = true;
-    if (!valid) {
-        if (StartBufferIO(buf, true))  // 这里处理一种比较巧合的并发状况，源代码中的注释解释得比较清楚。
+    if (!valid) {// 这里处理一种比较巧合的并发状况——另一个子进程正好要用这个buffer读取和我们同一个文件系统页(因此我们命中了buffer)，并且读取操作已经失败或者正在进行中(否则BM_VALID位会是1，也就是valid==true)。
+        if (StartBufferIO(buf, true))  
         {
             *foundPtr = false;
         }
