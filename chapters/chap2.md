@@ -194,7 +194,7 @@ if (StrategyControl->firstFreeBuffer >= 0)
 			 */
 			local_buf_state = LockBufHdr(buf);    //  获取buf的BM_LOCKED锁，并返回BM_LOCKED置成1后的buf->state。 buf的类型是BufferDesc* 。
 			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
-				&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)   // 再检查一次确保没有被其他进程用着。其实从上面的锁来看，这个if条件应该总是成立的，根据上面的注释佐证了这一点，这个if判断从8.3开始其实就不需要了。
+				&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)   // 再检查一次确保没有被其他进程用着。其实从上面的锁来看，这个if条件应该总是成立的，上面的代码中原本的英文注释佐证了这一点，这个if判断从8.3开始其实就不需要了。
 			{
 				if (strategy != NULL)
 					AddBufferToRing(strategy, buf);
@@ -206,11 +206,47 @@ if (StrategyControl->firstFreeBuffer >= 0)
 	}
 ```
 
+用clock sweep算法从buffer pool中找一个可以给我们用的页:
+```
+在freelist.c:StrategyGetBuffer函数中:
 
+trycounter = NBuffers;
+for (;;)
+{
+    buf = GetBufferDescriptor(ClockSweepTick());    //  从逻辑上来说ClockSweepTick相当于: return StrategyControl->nextVictimBuffer  % NBuffers， 但是实际要处理多进程同步问题，并且要更新统计信息。
 
+    /*
+     * If the buffer is pinned or has a nonzero usage_count, we cannot use
+     * it; decrement the usage_count (unless pinned) and keep scanning.
+     */
+    local_buf_state = LockBufHdr(buf);
 
-#### clock sweep
+    if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0)
+    {
+        if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
+        {
+            local_buf_state -= BUF_USAGECOUNT_ONE;
 
+            trycounter = NBuffers;
+        }
+        else
+        {
+            // 找到一个可以用的buffer。
+            if (strategy != NULL)
+                AddBufferToRing(strategy, buf);
+            *buf_state = local_buf_state;
+            return buf;
+        }
+    }
+    else if (--trycounter == 0)
+    {
+        // 已经检查过NBuffers个(整个buffer pool里一共有NBuffers个buffer)buffer，没有发现refcount=0的buffer。
+        UnlockBufHdr(buf, local_buf_state);
+        elog(ERROR, "no unpinned buffers available");  // 退出进程。
+    }
+    UnlockBufHdr(buf, local_buf_state);
+}
+```
 
 
 ### 2.3 SeqScan
