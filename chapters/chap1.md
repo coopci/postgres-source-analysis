@@ -214,7 +214,7 @@ libpq/pgcomm.c 中的 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE] 用来接收
 
 这里分析一种PqSendBuffer的典型用法:
 ```
-access/common/printtup.c:printtup -> // 把当前要输出的这个TupleTableSlot(也就是作为查询结果的一个row)装到一个StringInfo里面，然后 以这个StringInfo 为参数调用pq_endmessage_reuse
+access/common/printtup.c:printtup -> // 把当前要输出的这个TupleTableSlot(也就是作为查询结果的一个row)装到一个StringInfo里面，然后 以这个StringInfo 为参数调用pq_endmessage_reuse。printtup函数要作为DestReceiver的receiveSlot成员被调用。
     libpq/pgformat.c:pq_endmessage_reuse -> pq_putmessage(buf->cursor, buf->data, buf->len);
         libpq.h:pq_putmessage -> // 这是个宏，宏定义是PqCommMethods->putmessage函数指针，这个函数指针指向libpq/pgcomm.c:socket_putmessage
             libpq/pgcomm.c:socket_putmessage ->  // 把StringInfo转化为DataRow的形式输出
