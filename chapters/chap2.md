@@ -206,7 +206,7 @@ if (StrategyControl->firstFreeBuffer >= 0)
 	}
 ```
 
-用clock sweep算法从buffer pool中找一个可以给我们用的页:
+用clock sweep算法从buffer pool中找一个可以给我们用的buffer: 按顺序检查buffer pool中的每一个buffer，如果遇到一个buffer的refcount=0，那么判断它的usagecount，如果usagecount也是0，那么就用这个buffer，否则把它的usagecount减少1，然后对下一个buffer做相同的判断。如果发现buffer pool中没有refcount=0的buffer，则调用elog退出子进程。
 ```
 在freelist.c:StrategyGetBuffer函数中:
 
@@ -249,6 +249,135 @@ for (;;)
 ```
 
 
-### 2.3 SeqScan
+### 2.3 SeqScan 对表进行顺序扫描
+SeqScan是对表中的数据最基本的访问方式，假设我们实现一个只支持SeqScan的数据库——查询规划器query planner只作出使用SeqScan的判断，执行器executor也只会执行SeqScan，那么它也可以被称为"能工作"。在本节暂且不考虑其他的scan方法，也不考虑查询规划器是如何作出选用SeqScan而不选用其他scan方法的决定的，而把注意力放查询执行器是如何执行SeqScan上面。执行器有四个主要的对外(对外是指pg服务器代码的其他部分)接口函数:
+```
+在execMain.c中
+ExecutorStart()   // 在执行一个查询计划之前，做打开文件，分配存储等准备工作。
+ExecutorRun()     // 真正执行一个查询计划。
+ExecutorFinish()  // 触发after触发器之类的工作。
+ExecutorEnd()     // 关闭文件，unpin buffer等工作。
+```
+
+
+查询执行器执行一个查询规划至少要有两个步骤，第一步是
+ExecInitNode函数根据查询规划(类型是Plan *) 建立一个 PlanState，第二步是由ExecProcNode函数执行PlanState。
+
+#### ExecInitNode 和 ExecInitSeqScan
+```
+>	postgres.exe!ExecInitSeqScan(Scan * node, EState * estate, int eflags) Line 154	C
+        // 返回一个 SeqScanState *，其中ExecProcNode字段指向ExecSeqScan。
+ 	postgres.exe!ExecInitNode(Plan * node, EState * estate, int eflags) Line 207	C   
+        // 根据nodeTag(node)调用不同的ExecInitXXX，在这个例子中，nodeTag(node) == T_SeqScan，所以调用ExecInitSeqScan。
+        // ExecInitXXX 返回的 PlanState* 要为之后运行阶段的 ExecProcNode函数指名了 对应的 ExecProcXXXX，在这个例子中是ExecSeqScan。
+ 	postgres.exe!InitPlan(QueryDesc * queryDesc, int eflags) Line 1044	C
+        // 检查表级权限，根据queryDesc->plannedstmt对queryDesc->estate上的表级资源做初始化。
+        // queryDesc->planstate = ExecInitNode返回的PlanState*， 这个例子中是 SeqScanState*;
+        // 在运行阶段，这个SeqScanState*会被传给ExecSeqScan和SeqNext。
+ 	postgres.exe!standard_ExecutorStart(QueryDesc * queryDesc, int eflags) Line 265	C      
+        // 创建一个EState *estate，赋值给queryDesc->estate，调用 InitPlan。
+ 	postgres.exe!ExecutorStart(QueryDesc * queryDesc, int eflags) Line 146	C
+        // 只是调用standard_ExecutorStart的入口
+ 	postgres.exe!PortalStart(PortalData * portal, ParamListInfoData * params, int eflags, SnapshotData * snapshot) Line 525	C
+ 	postgres.exe!exec_simple_query(const char * query_string) Line 1091	C
+ 	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
+ 	postgres.exe!BackendRun(Port * port) Line 4362	C
+ 	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
+ 	postgres.exe!main(int argc, char * * argv) Line 216	C
+```
+其中的 portal->queryDesc->plannedstmt = portal->stmts->head->data.ptr_value，而portal->stmts 就是规划器(pg_plan_queries)返回的规划结果。
+
+重点看 ExecInitSeqScan
+```
+SeqScanState *
+ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
+{
+	SeqScanState *scanstate;
+
+	/*
+	 * Once upon a time it was possible to have an outerPlan of a SeqScan, but
+	 * not any more.
+	 */
+	Assert(outerPlan(node) == NULL);
+	Assert(innerPlan(node) == NULL);
+
+	/*
+	 * create state structure
+	 */
+	scanstate = makeNode(SeqScanState);
+	scanstate->ss.ps.plan = (Plan *) node;
+	scanstate->ss.ps.state = estate;
+	scanstate->ss.ps.ExecProcNode = ExecSeqScan;
+
+	/*
+	 * Miscellaneous initialization
+	 *
+	 * create expression context for node
+	 */
+	ExecAssignExprContext(estate, &scanstate->ss.ps);     //  在estate->es_query_cxt 上创建一个ExprContext，并赋值给 scanstate->ss.ps.ps_ExprContext
+
+	/*
+	 * Initialize scan relation.
+	 *
+	 * Get the relation object id from the relid'th entry in the range table,
+	 * open that relation and acquire appropriate lock on it.
+	 */
+	scanstate->ss.ss_currentRelation =
+		ExecOpenScanRelation(estate,
+							 node->scanrelid,
+							 eflags);
+
+	/* and create slot with the appropriate rowtype */
+	ExecInitScanTupleSlot(estate, &scanstate->ss,
+						  RelationGetDescr(scanstate->ss.ss_currentRelation));   //  创建一个TupleTableSlot，并赋值给 scanstate->ss_ScanTupleSlot。 这个TupleTableSlot用于从表中读数据。
+
+	/*
+	 * Initialize result slot, type and projection.
+	 */
+	ExecInitResultTupleSlotTL(estate, &scanstate->ss.ps);   // 创建一个TupleTableSlot，并赋值给 scanstate->ss.ps.ps_ResultTupleSlot。这个TupleTableSlot用于输出结果。
+	ExecAssignScanProjectionInfo(&scanstate->ss);  // 创建一个 ProjectionInfo *, 并赋值给 scanstate->ss.ps.ps_ProjInfo。要注意的是 scanstate->ss.ps.ps_ProjInfo->pi_state.resultslot 和 scanstate->ss.ps.ps_ResultTupleSlot 是相同的地址。
+
+	/*
+	 * initialize child expressions
+	 */
+	scanstate->ss.ps.qual =                     // 这个表示 where 条件。
+		ExecInitQual(node->plan.qual, (PlanState *) scanstate);
+
+	return scanstate;
+}
+```
+
+#### ExecProcNode 和 ExecSeqScan
+重点看 ExecSeqScan
+
+```
+>	postgres.exe!ReadBuffer_common(SMgrRelationData * smgr, char relpersistence, ForkNumber forkNum, unsigned int blockNum, ReadBufferMode mode, BufferAccessStrategyData * strategy, bool * hit) Line 788	C
+ 	postgres.exe!ReadBufferExtended(RelationData * reln, ForkNumber forkNum, unsigned int blockNum, ReadBufferMode mode, BufferAccessStrategyData * strategy) Line 664	C
+ 	postgres.exe!heapgetpage(HeapScanDescData * scan, unsigned int page) Line 379	C
+ 	postgres.exe!heapgettup_pagemode(HeapScanDescData * scan, ScanDirection dir, int nkeys, ScanKeyData * key) Line 838	C
+ 	postgres.exe!heap_getnext(HeapScanDescData * scan, ScanDirection direction) Line 1842	C
+ 	postgres.exe!SeqNext(SeqScanState * node) Line 80	C
+ 	postgres.exe!ExecScanFetch(ScanState * node, TupleTableSlot *(*)(ScanState *) accessMtd, bool(*)(ScanState *, TupleTableSlot *) recheckMtd) Line 96	C
+ 	postgres.exe!ExecScan(ScanState * node, TupleTableSlot *(*)(ScanState *) accessMtd, bool(*)(ScanState *, TupleTableSlot *) recheckMtd) Line 162	C    // ExecScanFetch，判断是否符合where条件(qual)，对字段做project，project结果存到 node->ps.ps_ProjInfo->pi_state.resultslot上，并返回node->ps.ps_ProjInfo->pi_state.resultslot。如果不需要做project，也没有where条件，则直接返回ExecScanFetch的结果。
+ 	postgres.exe!ExecSeqScan(PlanState * pstate) Line 132	C
+ 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
+ 	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
+ 	postgres.exe!ExecutePlan(EState * estate, PlanState * planstate, bool use_parallel_mode, CmdType operation, bool sendTuples, unsigned __int64 numberTuples, ScanDirection direction, _DestReceiver * dest, bool execute_once) Line 1721	C
+ 	postgres.exe!standard_ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 376	C
+ 	postgres.exe!ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 306	C
+ 	postgres.exe!PortalRunSelect(PortalData * portal, bool forward, long count, _DestReceiver * dest) Line 934	C
+ 	postgres.exe!PortalRun(PortalData * portal, long count, bool isTopLevel, bool run_once, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 773	C
+ 	postgres.exe!exec_simple_query(const char * query_string) Line 1130	C
+ 	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
+ 	postgres.exe!BackendRun(Port * port) Line 4362	C
+ 	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
+ 	postgres.exe!main(int argc, char * * argv) Line 216	C
+
+```
+
+
+
+还有ExecutorFinish()和ExecutorEnd()，不过本章的目的是帮读者建立一个比较清晰的大局观，所以暂且忽略这些细节。
+
 
 heapam.c:heapgetpage函数上设置断点。
