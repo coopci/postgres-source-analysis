@@ -348,16 +348,20 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 ```
 
 #### ExecProcNode 和 ExecSeqScan
-重点看 ExecSeqScan
-
+下面这个stack展示出了main函数到执行器框架代码再到读取buffer的调用关系的全貌。
 ```
 >	postgres.exe!ReadBuffer_common(SMgrRelationData * smgr, char relpersistence, ForkNumber forkNum, unsigned int blockNum, ReadBufferMode mode, BufferAccessStrategyData * strategy, bool * hit) Line 788	C
  	postgres.exe!ReadBufferExtended(RelationData * reln, ForkNumber forkNum, unsigned int blockNum, ReadBufferMode mode, BufferAccessStrategyData * strategy) Line 664	C
  	postgres.exe!heapgetpage(HeapScanDescData * scan, unsigned int page) Line 379	C
+        // 把ReadBufferExtended获取到的Buffer 赋值给 scan->rs_cbuf，
+        // 如果scan->rs_pageatatime==true，在这个例子里scan->rs_pageatatime确实==true，还要从buffer里找到所有当前snapshot可见的tuple，并把它们序号放到scan->rs_vistuples数组里，同时用scan->rs_ntuples记录这个Buffer中对当前snapshot可见tuple的总个数。
+        // 对各条tuple 调用HeapTupleSatisfiesVisibility 判断是否对当前snapshot 可见(visible)。MVCC 的判断就是在这里做的。
  	postgres.exe!heapgettup_pagemode(HeapScanDescData * scan, ScanDirection dir, int nkeys, ScanKeyData * key) Line 838	C
+        //  TestForOldSnapshot 检查当前的snapshot 对整个页而言是不是太老。
+        //  
  	postgres.exe!heap_getnext(HeapScanDescData * scan, ScanDirection direction) Line 1842	C
  	postgres.exe!SeqNext(SeqScanState * node) Line 80	C
- 	postgres.exe!ExecScanFetch(ScanState * node, TupleTableSlot *(*)(ScanState *) accessMtd, bool(*)(ScanState *, TupleTableSlot *) recheckMtd) Line 96	C
+ 	postgres.exe!ExecScanFetch(ScanState * node, TupleTableSlot *(*)(ScanState *) accessMtd, bool(*)(ScanState *, TupleTableSlot *) recheckMtd) Line 96	C     // 
  	postgres.exe!ExecScan(ScanState * node, TupleTableSlot *(*)(ScanState *) accessMtd, bool(*)(ScanState *, TupleTableSlot *) recheckMtd) Line 162	C    // ExecScanFetch，判断是否符合where条件(qual)，对字段做project，project结果存到 node->ps.ps_ProjInfo->pi_state.resultslot上，并返回node->ps.ps_ProjInfo->pi_state.resultslot。如果不需要做project，也没有where条件，则直接返回ExecScanFetch的结果。
  	postgres.exe!ExecSeqScan(PlanState * pstate) Line 132	C
  	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
@@ -374,10 +378,78 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
  	postgres.exe!main(int argc, char * * argv) Line 216	C
 
 ```
+重点看 ExecSeqScan，它是执行器框架代码和SeqScan之间的枢纽:
+```
+static TupleTableSlot *   // 上一章已经看过，ExecSeqScan返回的TupleTableSlot *表示要返回给客户端的一个row。
+ExecSeqScan(PlanState *pstate)
+{
+	SeqScanState *node = castNode(SeqScanState, pstate);
 
+	return ExecScan(&node->ss,
+					(ExecScanAccessMtd) SeqNext,
+					(ExecScanRecheckMtd) SeqRecheck);
+}
+```
+ExecSeqScan的实现很简单：以SeqNext和SeqRecheck调用ExecScan。目前我们只要知道ExecScan和ExecScanFetch都是执行其框架中所有scan方法的共同部分，所以直接看SeqNext。
 
+```
+static TupleTableSlot *
+SeqNext(SeqScanState *node)
+{
+	HeapTuple	tuple;
+	HeapScanDesc scandesc;
+	EState	   *estate;
+	ScanDirection direction;
+	TupleTableSlot *slot;
 
+	/*
+	 * get information from the estate and scan state
+	 */
+	scandesc = node->ss.ss_currentScanDesc;
+	estate = node->ss.ps.state;
+	direction = estate->es_direction;
+	slot = node->ss.ss_ScanTupleSlot;
+
+	if (scandesc == NULL)
+	{
+		/*
+		 * We reach here if the scan is not parallel, or if we're serially
+		 * executing a scan that was planned to be parallel.
+		 */
+		scandesc = heap_beginscan(node->ss.ss_currentRelation,   // 创建一个HeapScanDesc。
+								  estate->es_snapshot,
+								  0, NULL);             //  注意这里固定没有任何ScanKey，因为where条件的检查是在ExecScan做的。实际上10.0的代码里面所有对heap_beginscan的调用都没有指定任何ScanKey。
+		node->ss.ss_currentScanDesc = scandesc;
+	}
+
+	/*
+	 * get the next tuple from the table
+	 */
+	tuple = heap_getnext(scandesc, direction);    // 从这里可以看出，SeqScan只是简单地调用heapscan。在pg中，把存放表的数据的数据结构叫做heap——特指数据文件而不是索引，heapscan就是指对数据文件(当然实际是内存中的buffer)直接扫描。
+
+	/*
+	 * save the tuple and the buffer returned to us by the access methods in
+	 * our scan tuple slot and return the slot.  Note: we pass 'false' because
+	 * tuples returned by heap_getnext() are pointers onto disk pages and were
+	 * not created with palloc() and so should not be pfree()'d.  Note also
+	 * that ExecStoreTuple will increment the refcount of the buffer; the
+	 * refcount will not be dropped until the tuple table slot is cleared.
+	 */
+	if (tuple)    // tuple的类型是HeapTuple，但是需要返回一个TupleTableSlot *，所以调用ExecStoreTuple把tuple填到slot里面。
+		ExecStoreTuple(tuple,	/* tuple to store */
+					   slot,	/* slot to store in */
+					   scandesc->rs_cbuf,	/* buffer associated with this
+											 * tuple */
+					   false);	/* don't pfree this pointer */
+	else
+		ExecClearTuple(slot);
+
+	return slot;
+}
+```
 还有ExecutorFinish()和ExecutorEnd()，不过本章的目的是帮读者建立一个比较清晰的大局观，所以暂且忽略这些细节。
 
+### 总结
+第一章和本章一起给读者描绘了一个轮廓，这个轮廓展示了pg对客户端连接，网络buffer，共享内存，数据文件buffer的基本用法和heap的基本组织结构。也就是pg作为一个C/S结构的数据服务器的基本实现。从第三章开始，将对pg作为一个关系型数据库管理系统做深入分析。
 
-heapam.c:heapgetpage函数上设置断点。
+
