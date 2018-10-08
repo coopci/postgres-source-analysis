@@ -177,7 +177,7 @@ plantree_list 是 以querytree_list做为输入 进行查询规划后得到的�
 
 ```
     
-下面这个stack顶部的printtup是pg找到一个符合查询条件的row，向客户端输出(存入发送buffer或者调用tcp发送操作)这个row。
+下面这个stack顶部的printtup是pg找到一个符合查询条件的row(用TupleTableSlot *表示一个row)，向客户端输出(存入发送buffer或者调用tcp发送操作)这个row。
 ```
 >	postgres.exe!printtup(TupleTableSlot * slot, _DestReceiver * self) Line 376	C
  	postgres.exe!ExecutePlan(EState * estate, PlanState * planstate, bool use_parallel_mode, CmdType operation, bool sendTuples, unsigned __int64 numberTuples, ScanDirection direction, _DestReceiver * dest, bool execute_once) Line 1756	C
