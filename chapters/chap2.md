@@ -447,6 +447,47 @@ SeqNext(SeqScanState *node)
 	return slot;
 }
 ```
+下面分析对heap数据的操作，需要首先阅读官方文档66.6节Database page layout 作为基础。
+其中HeapTuple的定义如下:
+```
+typedef struct HeapTupleData
+{
+	uint32		t_len;			// *t_data的长度， 包含了23字节的HeapTupleHeaderData的长度加上null bitmap的长度再加上t_hoff指向的实际数据的长度。
+	ItemPointerData t_self;		// block id 和 ItemIdData 数组的下标。
+	Oid			t_tableOid;		// 这个tuple所属的表的oid。在pg里面，每个表都有一个oid作为标识。
+#define FIELDNO_HEAPTUPLEDATA_DATA 3
+	HeapTupleHeader t_data;		// 直接指向这个page对应的buffer中的tuple(对应66.6中Items数组的元素)。t_data->t_hoff偏移量是针对 t_data本身而言，也就是说这个tuple的数据的实际内存地址是 t_data + t_data->t_hoff。
+} HeapTupleData;
+```
+官方文档66.6节只是说ItemId一共4字节，包含实际item的偏移量和长度，但是没有给出具体二进制布局。 从代码里找到ItemId的二进制布局如下, 还有一个lp_flags字段。
+```
+typedef struct ItemIdData
+{
+	unsigned	lp_off:15,		// tuple(HeapTupleData)相对page起始的偏移量。
+				lp_flags:2,		
+				lp_len:15;		// tuple的总长度。
+} ItemIdData;
+
+typedef ItemIdData *ItemId;
+// 下面4个常量是lp_flags肯能的取值。
+#define LP_UNUSED		0		// 未使用。
+#define LP_NORMAL		1		// 正常使用状态。lp_len一定大于0。
+#define LP_REDIRECT		2		// HOT redirect lp_len应该等于0。
+#define LP_DEAD			3		// 死的，可能占存储空间也可能不占。
+```
+
+下面展示了heapgettup_pagemode从page buffer构建一个HeapTupleData的关键代码，page是页号，dp是改页对应的共享buffer中的地址:
+```
+lineoff = scan->rs_vistuples[lineindex];  // 类型OffsetNumber的 lineoff 是 ItemIdData 数组的下标。lineoff以1为起始，
+lpp = PageGetItemId(dp, lineoff); // lpp 的类型是ItemId，也就是ItemIdData *。
+Assert(ItemIdIsNormal(lpp));
+
+tuple->t_data = (HeapTupleHeader) PageGetItem((Page) dp, lpp);  //  t_data就在 dp + lpp->lp_off。
+tuple->t_len = ItemIdGetLength(lpp);                    // 把 lpp->lp_len赋值给 tuple->t_len。
+ItemPointerSet(&(tuple->t_self), page, lineoff);        // 把lineoff 赋值给tuple->t_self.ip_posid; 把page赋值给tuple->t_self.ip_blkid
+```
+
+
 还有ExecutorFinish()和ExecutorEnd()，不过本章的目的是帮读者建立一个比较清晰的大局观，所以暂且忽略这些细节。
 
 ### 总结
