@@ -1,9 +1,9 @@
 ## 第二章  共享内存，页buffer 和 SeqScan ##
 因为pg服务器要为每一个客户端连接fork一个专门对其进行服务的子进程，所以显然地，很多数据需要在这些子进程之间共享(还有一些后台任务的子进程也要共享这些数据，不过我们之后再考虑这些后台进程)，例如其中占空间最多的共享数据结构就是数据文件的内容的buffer。
 
-pg的数据文件和索引文件都被划分成固定大小的页(典型的页大小8KB)，内存和文件系统同步数据以页为单位进行，共享内存的组织和查找同样以页为单位进行 —— 当pg需要读取某条数据时，要先确保该条数据所在的页已经被读到了共享内存中，然后对共享内存做相应的访问；当pg需要写某条数据时，会先写到此数据所在的页在共享内存中的副本上，之后由后台进程把共享内存中的副本写到文件系统中。
+pg的数据文件和索引文件都被划分成固定大小的页(典型的页大小8KB)，pg以页为单位在内存和文件系统之间同步数据，共享buffer的组织和查找同样以页为单位进行 —— 当pg需要读取某条数据时，要先确保该条数据所在的页已经被读到了共享内存中，然后对共享内存做相应的访问；当pg需要写某条数据时，会先写到此数据所在的页在共享内存中的副本上，之后把该页在共享内存中的副本整页写到文件系统中。
 
-本章要分析的就是pg组织共享内存的方法，以及页buffer作为共享内存的一部分是如何被SeqScan的。SeqScan是逻辑上最简单的一种搜索数据的执行策略，它要做的是检查表中的每一个row，把符合筛选条件的row输出。综合上面刚说的"表中的数据都是按页存放"，那么我们不难推测出SeqScan的执行会是把表的每个页按顺序读到共享内存，然后对共享内存的页按顺序逐row筛选。
+本章要分析的就是pg组织共享内存的方法，以及页buffer作为共享内存的一部分是如何被SeqScan的。SeqScan是逻辑上最简单的一种搜索数据的执行策略，它要做的是检查表中的每一个row，把符合筛选条件的row输出。综合上面刚说的"表中的数据都是按页存放"，那么我们不难推测出SeqScan的执行会是把表的每个页按顺序读到共享内存，然后对共享内存中的每个页按顺序逐row筛选。
 
 多进程共享相同的数据区域，自然要考虑同步的问题，不过在这一章我们先把关注点放在数据操作上面，后面用单独的章节分析pg中同步多个子进程的手段。
 
@@ -54,25 +54,25 @@ ShmemInitHash 会调用ShmemInitStruct来分配或者attach到已经分配的数
 ```
 main.c:main
     postgres.c:SubPostmasterMain 
-        postgres.c:read_backend_variables   从命令参数影射临时共享区域到局部变量BackendParameters param，并以param为参数调用restore_backend_variables。
+        postgres.c:read_backend_variables   从命令参数映射临时共享区域到局部变量BackendParameters param，并以param为参数调用restore_backend_variables。
             postgres.c:restore_backend_variables   从param恢复 UsedShmemSegID，UsedShmemSegAddr 等全局变量。
-        postgres.c:PGSharedMemoryReAttach    以restore_backend_variables恢复得到的 UsedShmemSegID，UsedShmemSegAddr 作为参数将主共享区域影射到本进程的地址空间。
+        postgres.c:PGSharedMemoryReAttach    以restore_backend_variables恢复得到的 UsedShmemSegID，UsedShmemSegAddr 作为参数将主共享区域影射到本进程的地址空间 —— 需要本进程的UsedShmemSegAddr映射到地址和恢复出的UsedShmemSegAddr相同才行。
         shmem.c:InitShmemAccess  用UsedShmemSegAddr恢复ShmemSegHdr，ShmemBase和ShmemEnd。
-        ipci.c:CreateSharedMemoryAndSemaphores  把表示各个共享数据结构的全局变量attach到从ShmemSegHdr指出的主共享区的相应位置。
+        ipci.c:CreateSharedMemoryAndSemaphores  把表示各个共享数据结构的全局变量attach到从ShmemSegHdr指出的主共享区的相应位置。在这种情况下，ShmemIndex是用 ShmemSegHdr->index 恢复得到的。
 
 ```
 
 ### 2.2 页buffer
 #### BLCKSZ，shared_buffers和NBuffers
 有三个数字用来确定页buffer的布局:
-    1. BLCKSZ，这是个宏定义，用来指定一页的大小，默认是8192字节。可以在编译pg的时候的自定义。
-    2. shared_buffers， 这个是 postgresql.conf里面的一个配置项，用来告诉pg我们希望总共用多少共享内存来作为页buffer。可以在启动pg主进程之前指定，如果要改的话需要重启pg主进程。
+    1. BLCKSZ，这是个宏定义，用来指定一页的大小，默认是8192字节。
+    2. shared_buffers， 这是 postgresql.conf里面的一个配置项，用来告诉pg我们希望总共用多少共享内存来作为页buffer。可以在启动pg主进程之前指定，如果要改的话需要重启pg主进程。
     3. NBuffers = shared_buffers / BLCKSZ。 代码中的一个全局变量，记录内存中同时最多可以把多少个页放到buffer里面。
 #### 与页buffer相关的共享数据结构
 pg里面用三个共享数据结构来维护数据文件的页在内存中的影射，分别是:
-1. BufferBlocks "Buffer Blocks"               长度固定是NBuffers的数组，每一项都是一个数据页(长度是BLCKSZ字节)。每个页内部的布局在官方文档66.6Database Page Layout有详细描述。
-2. BufferDescriptors "Buffer Descriptors"     长度固定是NBuffers的数组，数组元素的类型是 BufferDescPadded。 这个数组中的元素和BufferBlocks中的元素是一一对应的，也就是说BufferDescriptors[i]是对BufferBlocks[i]的描述。
-3. SharedBufHash   "Shared Buffer Lookup Table"  最多有 NBuffers + NUM_BUFFER_PARTITIONS(128) 个key 的 hash table,  key的类型是BufferTag，value的类型是BufferLookupEnt。这个hash table 用来记录特定的页在上述两个数组中的位置。可以认为BufferTag指明一个页在文件系统中的位置，BufferLookupEnt.id则指出了该页在内存buffer中的位置。
+1. BufferBlocks "Buffer Blocks"               长度固定是NBuffers的数组，每一项都是一个数据页(长度是BLCKSZ字节，和文件系统中的每个页一一对应)。每个页内部的布局在官方文档66.6Database Page Layout有详细描述。
+2. BufferDescriptors "Buffer Descriptors"     长度固定是NBuffers的数组，数组元素的类型是 BufferDescPadded。 这个数组中的元素和BufferBlocks中的元素是一一对应的，也就是说BufferDescriptors[i]是对BufferBlocks[i]的描述。这个共享结构不会反映到文件系统，是专门用来在pg进程间协调(例如锁，引用计数)对BufferBlocks的访问用的。
+3. SharedBufHash   "Shared Buffer Lookup Table"  最多有 NBuffers + NUM_BUFFER_PARTITIONS(128) 个key 的 hash table,  key的类型是BufferTag，value的类型是BufferLookupEnt。这个hash table 用来记录特定的文件系统页在上述两个数组中的位置 —— BufferTag指明一个页在文件系统中的位置，BufferLookupEnt.id则指出了该页在内存buffer中的位置。
 ```
 // SharedBufHash 值的类型
 typedef struct
@@ -83,7 +83,7 @@ typedef struct
 ```
 
 另有两个辅助的共享数据结构:
-1. BufferIOLWLockArray  "Buffer IO Locks"  长度固定是NBuffers的数组，每一项都是一个专门用来同步对buffer做io的锁。
+1. BufferIOLWLockArray  "Buffer IO Locks"  长度固定是NBuffers的数组，每一项都是一个专门用来同步对buffer做io的锁。之所以不把这个锁作为BufferDescriptor的一个字段，是为了要让这些锁本身的内存地址对齐到CPU的cacheline上面。
 2. CkptBufferIds        "Checkpoint BufferIds"   长度固定是NBuffers的数组，用来在checkpoint时给buffer排序。
 
 ##### BufferDescriptors
@@ -435,6 +435,7 @@ SeqNext(SeqScanState *node)
 	 * that ExecStoreTuple will increment the refcount of the buffer; the
 	 * refcount will not be dropped until the tuple table slot is cleared.
 	 */
+     // 上面的英文注释中只是说ExecStoreTuple要增加对buffer的refcount，这有可能让人误以为是对BufferDesc.state字段增加计数，实际上ExecStoreTuple是调用IncrBufferRefCount增加私有(本进程私有，而非进程间共享)引用计数。
 	if (tuple)    // tuple的类型是HeapTuple，但是需要返回一个TupleTableSlot *，所以调用ExecStoreTuple把tuple填到slot里面。
 		ExecStoreTuple(tuple,	/* tuple to store */
 					   slot,	/* slot to store in */
@@ -456,7 +457,7 @@ typedef struct HeapTupleData
 	ItemPointerData t_self;		// block id 和 ItemIdData 数组的下标。
 	Oid			t_tableOid;		// 这个tuple所属的表的oid。在pg里面，每个表都有一个oid作为标识。
 #define FIELDNO_HEAPTUPLEDATA_DATA 3
-	HeapTupleHeader t_data;		// 直接指向这个page对应的buffer中的tuple(对应66.6中Items数组的元素)。t_data->t_hoff偏移量是针对 t_data本身而言，也就是说这个tuple的数据的实际内存地址是 t_data + t_data->t_hoff。
+	HeapTupleHeader t_data;		// 直接指向这个page对应的buffer中的tuple(对应66.6中Items数组的元素)。t_data->t_hoff偏移量是针对 t_data本身而言，也就是说这个tuple的用户数据的实际内存地址是 t_data + t_data->t_hoff。
 } HeapTupleData;
 ```
 官方文档66.6节只是说ItemId一共4字节，包含实际item的偏移量和长度，但是没有给出具体二进制布局。 从代码里找到ItemId的二进制布局如下, 还有一个lp_flags字段。
@@ -472,25 +473,23 @@ typedef ItemIdData *ItemId;
 // 下面4个常量是lp_flags肯能的取值。
 #define LP_UNUSED		0		// 未使用。
 #define LP_NORMAL		1		// 正常使用状态。lp_len一定大于0。
-#define LP_REDIRECT		2		// HOT redirect lp_len应该等于0。
-#define LP_DEAD			3		// 死的，可能占存储空间也可能不占。
+#define LP_REDIRECT		2		// HOT(heap only tuple) redirect lp_len应该等于0。
+#define LP_DEAD			3		// 死的，可能占存储空间也可能不占。是指这个ItemIdData所指的item已经不对任何事务可见了，item可能已经被recyle了，但是这个ItemIdData本身还被索引引用，尚未被recycle。
 ```
 
 下面展示了heapgettup_pagemode从page buffer构建一个HeapTupleData的关键代码，page是页号，dp是改页对应的共享buffer中的地址:
 ```
-lineoff = scan->rs_vistuples[lineindex];  // 类型OffsetNumber的 lineoff 是 ItemIdData 数组的下标。lineoff以1为起始，
+lineoff = scan->rs_vistuples[lineindex];  // lineoff 是 页头中 ItemIdData 数组的下标。lineoff以1为起始。
 lpp = PageGetItemId(dp, lineoff); // lpp 的类型是ItemId，也就是ItemIdData *。
 Assert(ItemIdIsNormal(lpp));
 
-tuple->t_data = (HeapTupleHeader) PageGetItem((Page) dp, lpp);  //  t_data就在 dp + lpp->lp_off。
+tuple->t_data = (HeapTupleHeader) PageGetItem((Page) dp, lpp);  //  t_data就在 dp + lpp->lp_off。tuple->t_data指向这一个row在共享buffer中的地址，tuple->t_data + tuple->t_data->t_hoff 则是这个row的用户数据所在的地址。
 tuple->t_len = ItemIdGetLength(lpp);                    // 把 lpp->lp_len赋值给 tuple->t_len。
 ItemPointerSet(&(tuple->t_self), page, lineoff);        // 把lineoff 赋值给tuple->t_self.ip_posid; 把page赋值给tuple->t_self.ip_blkid
 ```
-
+tuple
 
 还有ExecutorFinish()和ExecutorEnd()，不过本章的目的是帮读者建立一个比较清晰的大局观，所以暂且忽略这些细节。
 
-### 总结
-第一章和本章一起给读者描绘了一个轮廓，这个轮廓展示了pg对客户端连接，网络buffer，共享内存，数据文件buffer的基本用法和heap的基本组织结构。也就是pg作为一个C/S结构的数据服务器的基本实现。从第三章开始，将对pg作为一个关系型数据库管理系统做深入分析。
 
-
+[下一章](chap3.md)
