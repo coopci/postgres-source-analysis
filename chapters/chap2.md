@@ -123,8 +123,18 @@ typedef union BufferDescPadded
 10. BM_PERMANENT			(1U << 31)	/* permanent buffer (not unlogged,  or init fork) */
                             
 
-次高4位是usage_count，可以理解成是在最近一小段时间只能对这个页使用的热度，用于clock sweeps算法寻找可以被evict的页。低18位是refcount用来精确记录正在引用(PinBuffer)这个页的进程个数。
+次高4位是usage_count，可以理解成是在最近一小段时间只能对这个页使用的热度，用于clock sweeps算法寻找可以被evict的页。低18位是refcount用来精确记录正在引用(PinBuffer)这个页的进程个数——每个页最多有262144个客户端同时使用。
 
+敏锐的读者可能已经发现，如果postresql只有一个refcount来记录引用buffer页的进程个数，并且对这个数字的加减又是由各个进程主动进行的，那么就会有一个问题: 如果某个backend进程非正常退出，那么backend这个进程就不会unpin(refcount--)它已经pin过的buffer的了，这就导致了buffer泄露！postgresql解决这个问题的做法相当粗暴: 强制杀掉所有"其他"的backend进程，并通知客户端:
+```
+WARNING:  terminating connection because of crash of another server process
+DETAIL:  The postmaster has commanded this server process to roll back the curre
+nt transaction and exit, because another server process exited abnormally and po
+ssibly corrupted shared memory.
+HINT:  In a moment you should be able to reconnect to the database and repeat yo
+ur command.
+```
+这就要求开发人员要在客户端程序中处理好这种异常。
 
 ##### SharedBufHash
 这个hash table的key数量比较大(NBuffers + NUM_BUFFER_PARTITIONS 个)，而且需要频繁被多进程访问，pg对此作了一个优化——把它的key空间分成NUM_BUFFER_PARTITIONS(宏定义，默认128)个partition。当需要对某一个key(BufferTag)进行操作时，pg的上锁粒度都是该key所属的partition(计算所属partition的宏是BufTableHashPartition)。
