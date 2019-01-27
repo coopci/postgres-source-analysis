@@ -1,6 +1,24 @@
-## 第三章  insert, delete, update的执行 ##
+## 第三章 执行器 和 insert, delete, update的执行 ##
+
+### 执行器简介
+在postgres中，执行器(backend/executor)的工作是根据规划器(pg_plan_queries)返回的查询计划(Plan* PlannedStmt.planTree)执行查询。
+查询计划是个树形结构，每个节点被调用时都要返回下一个元组(tuple)，如果没有元组可返回，则返回NULL。如果一个节点还有子节点，那么它要先获取子节点的元组，然后这些自节点返回的元组作为数据源进行自己的运算后再返回-- 例如一个排序节点(struct Sort)要从它的子节点获取所有的元组然后排序，之后才能在每次被调用时从排好序的元组中返回下一个。 这样执行器执行树根的元素，其下各层子节点就会自动递归执行自己负责的部分，最终保证根节点的顺利执行。
 
 
+
+执行器本身对postgres的其他组建提供了四个接口: ExecutorStart, ExecutorRun, ExecutorFinish 和 ExecutorEnd。ProcessQuery 函数负责构建一个QueryDesc，并以QueryDesc为参数调用执行器的四个接口函数，上面提到的查询计划也是作为QueryDesc的字段传给执行器的。
+
+QueryDesc =plannedstmt=> (PlannedStmt*) =planTree=> (Plan *)
+
+
+查询计划对于执行器来说是个只读的数据结构。但是随着执行进度推进，势必会使当前这次"执行"的内部状态发生改变——例如执行扫描表的计划时要记录当前扫描到了哪条记录。postgres的做法是为查询计划树建立一个"平行"的查询状态树(PlanState*) -- 每一个查询计划树中的节点都有一个对应的查询状态树的结点，而且查询状态树的结点记录(plan字段)自己对应哪个查询计划树的结点
+
+
+
+
+ExecutorStart
+    InitPlan(QueryDesc)
+        ExecInitNode 根据Plan*初始化对应的PlanState*
 ### insert
 ```
 insert into table1(col1) values ('foo');
@@ -28,8 +46,6 @@ insert into table1(col1) values ('foo');
  	postgres.exe!BackendRun(Port * port) Line 4362	C
  	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
-
-
 
 ```
 
@@ -80,11 +96,29 @@ postgresql以NodeTag为基础，构建了一套"动态"类型机制。如果严格用C语言风格的类型转
      \=字段b=> 类型2" 的形式 同样表示 类型1的字段b的数据类型是类型2。
 
 以上面的insert为例，我们可以把数据结构这样更直观地描述出来:
+                                         
 Portal =stmts[0]=> (PlannedStmt*) =planTree=> (ModifyTable*) =plans[0]=> (Result*) =plan.targetlist[0]=> (TargetEntry*) =expr=> (FuncExpr*) =funcid=> Oid{1574}
                                                                                   \=plan.targetlist[1]=> (TargetEntry*) =expr=> (Const*) =consttype=> Oid{1043}
-                                                                                                                                        \=constvalue=> Datum{"foo"}
+                                                                                                                                         \=constvalue=> Datum{"foo"}
 
+ExecInitModifyTable 构造 ModifyTableState -- 对 ModifyTable的plans中的Plan执行ExecInitNode，并把得到的PlanState结果存到ModifyTableState的mt_plans中。
 
+ModifyTableState =ps.plan=> (ModifyTable*)
+                 \=mt_plans[0]=> (ResultState*)
+                 \=mt_nplans=> int (list_length(ModifyTable->plans))， 数组mt_plans中有几个元素，这个例子中是1，也就是说mt_plans中只有一个元素--ResultState
+                 \=ps.ExecProcNode=> ExecModifyTable  
+
+下面来看看 ExecModifyTable 是如何递归调用 ExecResult
+```
+>	postgres.exe!ExecResult(PlanState * pstate) Line 77	C
+ 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
+ 	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
+ 	postgres.exe!ExecModifyTable(PlanState * pstate) Line 2027	C
+ 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
+ 	这里忽略和之前相同的stack。
+```
+
+    
 ```
 >	postgres.exe!RelationPutHeapTuple(RelationData * relation, int buffer, HeapTupleData * tuple, bool token) Line 53	C
  	postgres.exe!heap_insert(RelationData * relation, HeapTupleData * tup, unsigned int cid, int options, BulkInsertStateData * bistate) Line 2490	C
