@@ -1,46 +1,48 @@
-## µÚÈıÕÂ Ö´ĞĞÆ÷ ºÍ insert, delete, updateµÄÖ´ĞĞ ##
+ï»¿## ç¬¬ä¸‰ç«  æ‰§è¡Œå™¨ å’Œ insert, delete, updateçš„æ‰§è¡Œ ##
 
-### Ö´ĞĞÆ÷¼ò½é
-ÔÚpostgresÖĞ£¬Ö´ĞĞÆ÷(backend/executor)µÄ¹¤×÷ÊÇ¸ù¾İ¹æ»®Æ÷(pg_plan_queries)·µ»ØµÄ²éÑ¯¼Æ»®(Plan* PlannedStmt.planTree)Ö´ĞĞ²éÑ¯¡£
-²éÑ¯¼Æ»®ÊÇ¸öÊ÷ĞÎ½á¹¹£¬Ã¿¸ö½Úµã±»µ÷ÓÃÊ±¶¼Òª·µ»ØÏÂÒ»¸öÔª×é(tuple)£¬Èç¹ûÃ»ÓĞÔª×é¿É·µ»Ø£¬Ôò·µ»ØNULL¡£Èç¹ûÒ»¸ö½Úµã»¹ÓĞ×Ó½Úµã£¬ÄÇÃ´ËüÒªÏÈ»ñÈ¡×Ó½ÚµãµÄÔª×é£¬È»ºóÕâĞ©×Ô½Úµã·µ»ØµÄÔª×é×÷ÎªÊı¾İÔ´½øĞĞ×Ô¼ºµÄÔËËãºóÔÙ·µ»Ø-- ÀıÈçÒ»¸öÅÅĞò½Úµã(struct Sort)Òª´ÓËüµÄ×Ó½Úµã»ñÈ¡ËùÓĞµÄÔª×éÈ»ºóÅÅĞò£¬Ö®ºó²ÅÄÜÔÚÃ¿´Î±»µ÷ÓÃÊ±´ÓÅÅºÃĞòµÄÔª×éÖĞ·µ»ØÏÂÒ»¸ö¡£ ÕâÑùÖ´ĞĞÆ÷Ö´ĞĞÊ÷¸ùµÄÔªËØ£¬ÆäÏÂ¸÷²ã×Ó½Úµã¾Í»á×Ô¶¯µİ¹éÖ´ĞĞ×Ô¼º¸ºÔğµÄ²¿·Ö£¬×îÖÕ±£Ö¤¸ù½ÚµãµÄË³ÀûÖ´ĞĞ¡£
+### æ‰§è¡Œå™¨ç®€ä»‹
+åœ¨postgresä¸­ï¼Œæ‰§è¡Œå™¨(backend/executor)çš„å·¥ä½œæ˜¯æ ¹æ®è§„åˆ’å™¨(pg_plan_queries)è¿”å›çš„æŸ¥è¯¢è®¡åˆ’(Plan* PlannedStmt.planTree)æ‰§è¡ŒæŸ¥è¯¢ã€‚
+æŸ¥è¯¢è®¡åˆ’æ˜¯ä¸ªæ ‘å½¢ç»“æ„ï¼Œæ¯ä¸ªèŠ‚ç‚¹è¢«è°ƒç”¨æ—¶éƒ½è¦è¿”å›ä¸‹ä¸€ä¸ªå…ƒç»„(tuple)ï¼Œå¦‚æœæ²¡æœ‰å…ƒç»„å¯è¿”å›ï¼Œåˆ™è¿”å›NULLã€‚å¦‚æœä¸€ä¸ªèŠ‚ç‚¹è¿˜æœ‰å­èŠ‚ç‚¹ï¼Œé‚£ä¹ˆå®ƒè¦å…ˆè·å–å­èŠ‚ç‚¹çš„å…ƒç»„ï¼Œç„¶åè¿™äº›è‡ªèŠ‚ç‚¹è¿”å›çš„å…ƒç»„ä½œä¸ºæ•°æ®æºè¿›è¡Œè‡ªå·±çš„è¿ç®—åå†è¿”å›-- ä¾‹å¦‚ä¸€ä¸ªæ’åºèŠ‚ç‚¹(struct Sort)è¦ä»å®ƒçš„å­èŠ‚ç‚¹è·å–æ‰€æœ‰çš„å…ƒç»„ç„¶åæ’åºï¼Œä¹‹åæ‰èƒ½åœ¨æ¯æ¬¡è¢«è°ƒç”¨æ—¶ä»æ’å¥½åºçš„å…ƒç»„ä¸­è¿”å›ä¸‹ä¸€ä¸ªã€‚ è¿™æ ·æ‰§è¡Œå™¨æ‰§è¡Œæ ‘æ ¹çš„å…ƒç´ ï¼Œå…¶ä¸‹å„å±‚å­èŠ‚ç‚¹å°±ä¼šè‡ªåŠ¨é€’å½’æ‰§è¡Œè‡ªå·±è´Ÿè´£çš„éƒ¨åˆ†ï¼Œæœ€ç»ˆä¿è¯æ ¹èŠ‚ç‚¹çš„é¡ºåˆ©æ‰§è¡Œã€‚
 
 
 
-Ö´ĞĞÆ÷±¾Éí¶ÔpostgresµÄÆäËû×é½¨Ìá¹©ÁËËÄ¸ö½Ó¿Ú: ExecutorStart, ExecutorRun, ExecutorFinish ºÍ ExecutorEnd¡£ProcessQuery º¯Êı¸ºÔğ¹¹½¨Ò»¸öQueryDesc£¬²¢ÒÔQueryDescÎª²ÎÊıµ÷ÓÃÖ´ĞĞÆ÷µÄËÄ¸ö½Ó¿Úº¯Êı£¬ÉÏÃæÌáµ½µÄ²éÑ¯¼Æ»®Ò²ÊÇ×÷ÎªQueryDescµÄ×Ö¶Î´«¸øÖ´ĞĞÆ÷µÄ¡£
+æ‰§è¡Œå™¨æœ¬èº«å¯¹postgresçš„å…¶ä»–ç»„å»ºæä¾›äº†å››ä¸ªæ¥å£: ExecutorStart, ExecutorRun, ExecutorFinish å’Œ ExecutorEndã€‚ProcessQuery å‡½æ•°è´Ÿè´£æ„å»ºä¸€ä¸ªQueryDescï¼Œå¹¶ä»¥QueryDescä¸ºå‚æ•°è°ƒç”¨æ‰§è¡Œå™¨çš„å››ä¸ªæ¥å£å‡½æ•°ï¼Œä¸Šé¢æåˆ°çš„æŸ¥è¯¢è®¡åˆ’ä¹Ÿæ˜¯ä½œä¸ºQueryDescçš„å­—æ®µä¼ ç»™æ‰§è¡Œå™¨çš„ã€‚
 
 QueryDesc =plannedstmt=> (PlannedStmt*) =planTree=> (Plan *)
 
 
-²éÑ¯¼Æ»®¶ÔÓÚÖ´ĞĞÆ÷À´ËµÊÇ¸öÖ»¶ÁµÄÊı¾İ½á¹¹¡£µ«ÊÇËæ×ÅÖ´ĞĞ½ø¶ÈÍÆ½ø£¬ÊÆ±Ø»áÊ¹µ±Ç°Õâ´Î"Ö´ĞĞ"µÄÄÚ²¿×´Ì¬·¢Éú¸Ä±ä¡ª¡ªÀıÈçÖ´ĞĞÉ¨Ãè±íµÄ¼Æ»®Ê±Òª¼ÇÂ¼µ±Ç°É¨Ãèµ½ÁËÄÄÌõ¼ÇÂ¼¡£postgresµÄ×ö·¨ÊÇÎª²éÑ¯¼Æ»®Ê÷½¨Á¢Ò»¸ö"Æ½ĞĞ"µÄ²éÑ¯×´Ì¬Ê÷(PlanState*) -- Ã¿Ò»¸ö²éÑ¯¼Æ»®Ê÷ÖĞµÄ½Úµã¶¼ÓĞÒ»¸ö¶ÔÓ¦µÄ²éÑ¯×´Ì¬Ê÷µÄ½áµã£¬¶øÇÒ²éÑ¯×´Ì¬Ê÷µÄ½áµã¼ÇÂ¼(plan×Ö¶Î)×Ô¼º¶ÔÓ¦ÄÄ¸ö²éÑ¯¼Æ»®Ê÷µÄ½áµã
+æŸ¥è¯¢è®¡åˆ’å¯¹äºæ‰§è¡Œå™¨æ¥è¯´æ˜¯ä¸ªåªè¯»çš„æ•°æ®ç»“æ„ã€‚ä½†æ˜¯éšç€æ‰§è¡Œè¿›åº¦æ¨è¿›ï¼ŒåŠ¿å¿…ä¼šä½¿å½“å‰è¿™æ¬¡"æ‰§è¡Œ"çš„å†…éƒ¨çŠ¶æ€å‘ç”Ÿæ”¹å˜â€”â€”ä¾‹å¦‚æ‰§è¡Œæ‰«æè¡¨çš„è®¡åˆ’æ—¶è¦è®°å½•å½“å‰æ‰«æåˆ°äº†å“ªæ¡è®°å½•ã€‚postgresçš„åšæ³•æ˜¯ä¸ºæŸ¥è¯¢è®¡åˆ’æ ‘å»ºç«‹ä¸€ä¸ª"å¹³è¡Œ"çš„æŸ¥è¯¢çŠ¶æ€æ ‘(PlanState*) -- æ¯ä¸€ä¸ªæŸ¥è¯¢è®¡åˆ’æ ‘ä¸­çš„èŠ‚ç‚¹éƒ½æœ‰ä¸€ä¸ªå¯¹åº”çš„æŸ¥è¯¢çŠ¶æ€æ ‘çš„ç»“ç‚¹ï¼Œè€Œä¸”æŸ¥è¯¢çŠ¶æ€æ ‘çš„ç»“ç‚¹è®°å½•(planå­—æ®µ)è‡ªå·±å¯¹åº”å“ªä¸ªæŸ¥è¯¢è®¡åˆ’æ ‘çš„ç»“ç‚¹
 
 
 
 
 ExecutorStart
     InitPlan(QueryDesc)
-        ExecInitNode ¸ù¾İPlan*³õÊ¼»¯¶ÔÓ¦µÄPlanState*
+        ExecInitNode æ ¹æ®Plan*åˆå§‹åŒ–å¯¹åº”çš„PlanState*
+ExecutorRun å¯¹æ ¹èŠ‚ç‚¹è°ƒç”¨ExecutePlan
+   
 ### insert
 ```
 insert into table1(col1) values ('foo');
 ```
 
-³õÊ¼»¯Ä¿±ê±í:
+åˆå§‹åŒ–ç›®æ ‡è¡¨:
 ```
 >	postgres.exe!InitPlan(QueryDesc * queryDesc, int eflags) Line 849	C
-        // ÓÃ getrelid »ñµÃÄ¿±ê±íµÄoid¡£ ´ÓgetrelidµÄÊµÏÖ¿ÉÒÔ¿´³ö: resultRelationsÊÇÒÔ1ÎªÆğÊ¼¡£
-        // ÓÃ heap_open ÒÔRowExclusiveLockÄ£Ê½´ò¿ªRelation¡£²¢·Åµ½estate->es_result_relationsÀïÃæ¡£
+        // ç”¨ getrelid è·å¾—ç›®æ ‡è¡¨çš„oidã€‚ ä»getrelidçš„å®ç°å¯ä»¥çœ‹å‡º: resultRelationsæ˜¯ä»¥1ä¸ºèµ·å§‹ã€‚
+        // ç”¨ heap_open ä»¥RowExclusiveLockæ¨¡å¼æ‰“å¼€Relationã€‚å¹¶æ”¾åˆ°estate->es_result_relationsé‡Œé¢ã€‚
  	postgres.exe!standard_ExecutorStart(QueryDesc * queryDesc, int eflags) Line 265	C
  	postgres.exe!ExecutorStart(QueryDesc * queryDesc, int eflags) Line 146	C
  	postgres.exe!ProcessQuery(PlannedStmt * plan, const char * sourceText, ParamListInfoData * params, QueryEnvironment * queryEnv, _DestReceiver * dest, char * completionTag) Line 161	C
  	postgres.exe!PortalRunMulti(PortalData * portal, bool isTopLevel, bool setHoldSnapshot, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 1291	C
  	postgres.exe!PortalRun(PortalData * portal, long count, bool isTopLevel, bool run_once, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 803	C
  	postgres.exe!exec_simple_query(const char * query_string) Line 1130	C
-        // ÕâÀïÎÒÃÇÒªÅªÇå³şÒª²åÈëµÄÊı¾İºÍÄ¿±ê±íÊÇÈçºÎ±íÊ¾µÄ£¬Ê×ÏÈÊÇÒª²åÈëµÄÊı¾İ£º
-        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->rtable ÀïÃæ¼ÇÂ¼×ÅÕâ¸ö²éÑ¯Ëù¿ÉÄÜÓÃµ½µÄËùÓĞµÄ±í£¬ÔÚÎÒÃÇÕâ¸öÀı×ÓÖĞÖ»ÓÃµ½ÁËÒ»¸ö±í:
-        ((RangeTblEntry*)((PlannedStmt *)(portal->stmts->head->data.ptr_value))->rtable->head->data.ptr_value)->relid ºÍ SELECT oid, * FROM pg_catalog.pg_class where relname='table1'; µÃµ½oidÕıºÃÎÇºÏ¡£
+        // è¿™é‡Œæˆ‘ä»¬è¦å¼„æ¸…æ¥šè¦æ’å…¥çš„æ•°æ®å’Œç›®æ ‡è¡¨æ˜¯å¦‚ä½•è¡¨ç¤ºçš„ï¼Œé¦–å…ˆæ˜¯è¦æ’å…¥çš„æ•°æ®ï¼š
+        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->rtable é‡Œé¢è®°å½•ç€è¿™ä¸ªæŸ¥è¯¢æ‰€å¯èƒ½ç”¨åˆ°çš„æ‰€æœ‰çš„è¡¨ï¼Œåœ¨æˆ‘ä»¬è¿™ä¸ªä¾‹å­ä¸­åªç”¨åˆ°äº†ä¸€ä¸ªè¡¨:
+        ((RangeTblEntry*)((PlannedStmt *)(portal->stmts->head->data.ptr_value))->rtable->head->data.ptr_value)->relid å’Œ SELECT oid, * FROM pg_catalog.pg_class where relname='table1'; å¾—åˆ°oidæ­£å¥½å»åˆã€‚
         
-        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->resultRelations ÀïÃæ¼ÇÂ¼×ÅinsertµÄÄ¿±ê±íÔÚrttableÖĞµÄË÷Òı£¬ÓÃÕâ¸öwatch¿ÉÒÔ¿´µ½ËüµÄÖµÊÇ1:
-        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->resultRelations->head->data.int_value£¬
+        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->resultRelations é‡Œé¢è®°å½•ç€insertçš„ç›®æ ‡è¡¨åœ¨rttableä¸­çš„ç´¢å¼•ï¼Œç”¨è¿™ä¸ªwatchå¯ä»¥çœ‹åˆ°å®ƒçš„å€¼æ˜¯1:
+        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->resultRelations->head->data.int_valueï¼Œ
     
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
  	postgres.exe!BackendRun(Port * port) Line 4362	C
@@ -52,12 +54,12 @@ insert into table1(col1) values ('foo');
 execute
 ```
 >	postgres.exe!heap_fill_tuple(tupleDesc * tupleDesc, unsigned __int64 * values, bool * isnull, char * data, unsigned __int64 data_size, unsigned short * infomask, unsigned char * bit) Line 345	C
-        // ÏòÏÂÃæÈı¸öµØÖ·ÖĞÌîÈëÕıÈ·µÄÊı¾İ£¬Èı¸öµØÖ·¶ÔÓ¦µÄÊı¾İ ²Î¿¼HeapTupleHeaderData½á¹¹ºÍ¹Ù·½ÎÄµµµÄtable 66.4¡£
-        // char *data  td + hoff  ¶ÔÓ¦ÕæÕıµÄÓÃ»§Êı¾İ¡£
+        // å‘ä¸‹é¢ä¸‰ä¸ªåœ°å€ä¸­å¡«å…¥æ­£ç¡®çš„æ•°æ®ï¼Œä¸‰ä¸ªåœ°å€å¯¹åº”çš„æ•°æ® å‚è€ƒHeapTupleHeaderDataç»“æ„å’Œå®˜æ–¹æ–‡æ¡£çš„table 66.4ã€‚
+        // char *data  td + hoff  å¯¹åº”çœŸæ­£çš„ç”¨æˆ·æ•°æ®ã€‚
         // uint16 *infomask,   &td->t_infomask
-        // bits8 *bit  td->t_bits   ¶ÔÓ¦null bitmap
+        // bits8 *bit  td->t_bits   å¯¹åº”null bitmap
  	postgres.exe!heap_form_tuple(tupleDesc * tupleDescriptor, unsigned __int64 * values, bool * isnull) Line 1157	C
-        // ÔÚµ±Ç°MemoryContextÀï·ÖÅäÒ»¸öHeapTuple£¬²¢¸ù¾İtupleDescriptor¶Ô¸÷×Ö¶ÎµÄÃèÊö°Ñvalues¸ø¶¨µÄ¸÷×Ö¶ÎµÄÖµ£¬¿½±´µ½·ÖÅäºÃµÄHeapTupleÖĞ¡£Õâ¸öHeapTuple²»ÔÚ¹²ÏíbufferÖĞ£¬Ö®ºó»¹Òª°ÑËüÕû¸ö¿½±´µ½¹²ÏíbufferÖĞ¡£
+        // åœ¨å½“å‰MemoryContexté‡Œåˆ†é…ä¸€ä¸ªHeapTupleï¼Œå¹¶æ ¹æ®tupleDescriptorå¯¹å„å­—æ®µçš„æè¿°æŠŠvaluesç»™å®šçš„å„å­—æ®µçš„å€¼ï¼Œæ‹·è´åˆ°åˆ†é…å¥½çš„HeapTupleä¸­ã€‚è¿™ä¸ªHeapTupleä¸åœ¨å…±äº«bufferä¸­ï¼Œä¹‹åè¿˜è¦æŠŠå®ƒæ•´ä¸ªæ‹·è´åˆ°å…±äº«bufferä¸­ã€‚
         //
  	postgres.exe!ExecCopySlotTuple(TupleTableSlot * slot) Line 603	C
  	postgres.exe!ExecMaterializeSlot(TupleTableSlot * slot) Line 806	C
@@ -72,16 +74,16 @@ execute
  	postgres.exe!PortalRunMulti(PortalData * portal, bool isTopLevel, bool setHoldSnapshot, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 1291	C
  	postgres.exe!PortalRun(PortalData * portal, long count, bool isTopLevel, bool run_once, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 803	C
  	postgres.exe!exec_simple_query(const char * query_string) Line 1130	C
-            // ÕâÀïÎÒÃÇÒªÅªÇå³şÒª²åÈëµÄÊı¾İÊÇÈçºÎ±íÊ¾µÄ£º
-            // ²ì¿´ (ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree) µÄÄÚÈİ¡£
-            // µÚÒ»¸ö²ÎÊı(FuncExpr*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->data.ptr_value)->expr£¬ ÆäÖĞµÄ funcid ×Ö¶ÎµÄÖµÊÇ1574
+            // è¿™é‡Œæˆ‘ä»¬è¦å¼„æ¸…æ¥šè¦æ’å…¥çš„æ•°æ®æ˜¯å¦‚ä½•è¡¨ç¤ºçš„ï¼š
+            // å¯Ÿçœ‹ (ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree) çš„å†…å®¹ã€‚
+            // ç¬¬ä¸€ä¸ªå‚æ•°(FuncExpr*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->data.ptr_value)->exprï¼Œ å…¶ä¸­çš„ funcid å­—æ®µçš„å€¼æ˜¯1574
             // SELECT  oid, * FROM pg_proc where oid = 1574 ==> nextval
             
-            // µÚ¶ş¸ö²ÎÊı (Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->expr£¬ ÆäÖĞµÄconsttype×Ö¶ÎµÄÖµÊÇ1043
+            // ç¬¬äºŒä¸ªå‚æ•° (Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->exprï¼Œ å…¶ä¸­çš„consttypeå­—æ®µçš„å€¼æ˜¯1043
             // select oid, * from pg_type where oid = 1043; ==> varchar
-            // ÖªµÀÊÇvarcharÖ®ºó£¬ÓÃÕâ¸öwatch¿´¿´ (char*)((Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->expr)->constvalue + 4 Õâ¸ö×Ö·û´®µ½µ×ÊÇÊ²Ã´£¬·¢ÏÖ¹ûÈ»ÊÇ"foo"¡£
+            // çŸ¥é“æ˜¯varcharä¹‹åï¼Œç”¨è¿™ä¸ªwatchçœ‹çœ‹ (char*)((Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->expr)->constvalue + 4 è¿™ä¸ªå­—ç¬¦ä¸²åˆ°åº•æ˜¯ä»€ä¹ˆï¼Œå‘ç°æœç„¶æ˜¯"foo"ã€‚
             
-            // ((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist ÓÃÀ´´æ·ÅÒª²åÈëµ½±íÖĞµÄÊı¾İ¡£
+            // ((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist ç”¨æ¥å­˜æ”¾è¦æ’å…¥åˆ°è¡¨ä¸­çš„æ•°æ®ã€‚
             
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
  	postgres.exe!BackendRun(Port * port) Line 4362	C
@@ -89,48 +91,48 @@ execute
  	postgres.exe!main(int argc, char * * argv) Line 216	C
 
 ```
-postgresqlÒÔNodeTagÎª»ù´¡£¬¹¹½¨ÁËÒ»Ì×"¶¯Ì¬"ÀàĞÍ»úÖÆ¡£Èç¹ûÑÏ¸ñÓÃCÓïÑÔ·ç¸ñµÄÀàĞÍ×ª»»½øĞĞ±íÊ¾£¬¾Í»áÏñÉÏÃæµÄwatch±í´ïÊ½Ò»ÑùÄÑÒÔ¿´¶®£¬ËùÒÔ±ÊÕß·¢Ã÷ÁËÒÔÏÂÕâÖÖ¸üÒ×ÓÚÈËÀàÔÄ¶ÁµÄ·½Ê½À´ÃèÊöÔËĞĞÊ±µÄÊı¾İ½á¹¹¡£ÕâÖÖ±íÊ¾ĞÎÊ½Ã»ÓĞÑÏ¸ñÇø·ÖÖ¸ÕëºÍ½á¹¹¡£
-ÓÃ "ÀàĞÍ1 =×Ö¶Îa=> ÀàĞÍ2{Öµ}" À´±íÊ¾ ÀàĞÍ1µÄ×Ö¶ÎaµÄÊı¾İÀàĞÍÊÇÀàĞÍ2£¬{}ÀïÃæÔòÊÇÀàĞÍ2µÄÖµ¡£
-Èç¹û ×Ö¶ÎaµÄCÓïÑÔÀàĞÍÊÇList*£¬ÄÇÃ´ÓÃ  "=×Ö¶Îa[n]=>" µÄĞÎÊ½À´±íÊ¾ List*µÄµÚn¸öÔªËØ ÊÇ¼ıÍ·ÓÒ±ßµÄÀàĞÍ¡£
-"ÀàĞÍ1
-     \=×Ö¶Îb=> ÀàĞÍ2" µÄĞÎÊ½ Í¬Ñù±íÊ¾ ÀàĞÍ1µÄ×Ö¶ÎbµÄÊı¾İÀàĞÍÊÇÀàĞÍ2¡£
+postgresqlä»¥NodeTagä¸ºåŸºç¡€ï¼Œæ„å»ºäº†ä¸€å¥—"åŠ¨æ€"ç±»å‹æœºåˆ¶ã€‚å¦‚æœä¸¥æ ¼ç”¨Cè¯­è¨€é£æ ¼çš„ç±»å‹è½¬æ¢è¿›è¡Œè¡¨ç¤ºï¼Œå°±ä¼šåƒä¸Šé¢çš„watchè¡¨è¾¾å¼ä¸€æ ·éš¾ä»¥çœ‹æ‡‚ï¼Œæ‰€ä»¥ç¬”è€…å‘æ˜äº†ä»¥ä¸‹è¿™ç§æ›´æ˜“äºäººç±»é˜…è¯»çš„æ–¹å¼æ¥æè¿°è¿è¡Œæ—¶çš„æ•°æ®ç»“æ„ã€‚è¿™ç§è¡¨ç¤ºå½¢å¼æ²¡æœ‰ä¸¥æ ¼åŒºåˆ†æŒ‡é’ˆå’Œç»“æ„ã€‚
+ç”¨ "ç±»å‹1 =å­—æ®µa=> ç±»å‹2{å€¼}" æ¥è¡¨ç¤º ç±»å‹1çš„å­—æ®µaçš„æ•°æ®ç±»å‹æ˜¯ç±»å‹2ï¼Œ{}é‡Œé¢åˆ™æ˜¯ç±»å‹2çš„å€¼ã€‚
+å¦‚æœ å­—æ®µaçš„Cè¯­è¨€ç±»å‹æ˜¯List*ï¼Œé‚£ä¹ˆç”¨  "=å­—æ®µa[n]=>" çš„å½¢å¼æ¥è¡¨ç¤º List*çš„ç¬¬nä¸ªå…ƒç´  æ˜¯ç®­å¤´å³è¾¹çš„ç±»å‹ã€‚
+"ç±»å‹1
+     \=å­—æ®µb=> ç±»å‹2" çš„å½¢å¼ åŒæ ·è¡¨ç¤º ç±»å‹1çš„å­—æ®µbçš„æ•°æ®ç±»å‹æ˜¯ç±»å‹2ã€‚
 
-ÒÔÉÏÃæµÄinsertÎªÀı£¬ÎÒÃÇ¿ÉÒÔ°ÑÊı¾İ½á¹¹ÕâÑù¸üÖ±¹ÛµØÃèÊö³öÀ´:
+ä»¥ä¸Šé¢çš„insertä¸ºä¾‹ï¼Œæˆ‘ä»¬å¯ä»¥æŠŠæ•°æ®ç»“æ„è¿™æ ·æ›´ç›´è§‚åœ°æè¿°å‡ºæ¥:
                                          
 Portal =stmts[0]=> (PlannedStmt*) =planTree=> (ModifyTable*) =plans[0]=> (Result*) =plan.targetlist[0]=> (TargetEntry*) =expr=> (FuncExpr*) =funcid=> Oid{1574}
                                                                                   \=plan.targetlist[1]=> (TargetEntry*) =expr=> (Const*) =consttype=> Oid{1043}
                                                                                                                                          \=constvalue=> Datum{"foo"}
 
-ExecInitModifyTable ¹¹Ôì ModifyTableState -- ¶Ô ModifyTableµÄplansÖĞµÄPlanÖ´ĞĞExecInitNode£¬²¢°ÑµÃµ½µÄPlanState½á¹û´æµ½ModifyTableStateµÄmt_plansÖĞ¡£
+ExecInitModifyTable æ„é€  ModifyTableState -- å¯¹ ModifyTableçš„plansä¸­çš„Planæ‰§è¡ŒExecInitNodeï¼Œå¹¶æŠŠå¾—åˆ°çš„PlanStateç»“æœå­˜åˆ°ModifyTableStateçš„mt_plansä¸­ã€‚
 
 ModifyTableState =ps.plan=> (ModifyTable*)
                  \=mt_plans[0]=> (ResultState*)
-                 \=mt_nplans=> int (list_length(ModifyTable->plans))£¬ Êı×émt_plansÖĞÓĞ¼¸¸öÔªËØ£¬Õâ¸öÀı×ÓÖĞÊÇ1£¬Ò²¾ÍÊÇËµmt_plansÖĞÖ»ÓĞÒ»¸öÔªËØ--ResultState
+                 \=mt_nplans=> int (list_length(ModifyTable->plans))ï¼Œ æ•°ç»„mt_plansä¸­æœ‰å‡ ä¸ªå…ƒç´ ï¼Œè¿™ä¸ªä¾‹å­ä¸­æ˜¯1ï¼Œä¹Ÿå°±æ˜¯è¯´mt_plansä¸­åªæœ‰ä¸€ä¸ªå…ƒç´ --ResultState
                  \=ps.ExecProcNode=> ExecModifyTable  
 
-ÏÂÃæÀ´¿´¿´ ExecModifyTable ÊÇÈçºÎµİ¹éµ÷ÓÃ ExecResult
+ä¸‹é¢æ¥çœ‹çœ‹ ExecModifyTable æ˜¯å¦‚ä½•é€’å½’è°ƒç”¨ ExecResult
 ```
 >	postgres.exe!ExecResult(PlanState * pstate) Line 77	C
  	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
  	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
  	postgres.exe!ExecModifyTable(PlanState * pstate) Line 2027	C
  	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
- 	ÕâÀïºöÂÔºÍÖ®Ç°ÏàÍ¬µÄstack¡£
+ 	è¿™é‡Œå¿½ç•¥å’Œä¹‹å‰ç›¸åŒçš„stackã€‚
 ```
 
     
 ```
 >	postgres.exe!RelationPutHeapTuple(RelationData * relation, int buffer, HeapTupleData * tuple, bool token) Line 53	C
  	postgres.exe!heap_insert(RelationData * relation, HeapTupleData * tup, unsigned int cid, int options, BulkInsertStateData * bistate) Line 2490	C
-        //µ÷ÓÃ heap_prepare_insert ´¦ÀíTOAST¡£
+        //è°ƒç”¨ heap_prepare_insert å¤„ç†TOASTã€‚
         // 
  	postgres.exe!ExecInsert(ModifyTableState * mtstate, TupleTableSlot * slot, TupleTableSlot * planSlot, EState * estate, bool canSetTag) Line 529	C
-        // µ÷ÓÃ heap_insert °Ñ ExecMaterializeSlot µÃµ½µÄtupleĞ´µ½pageÀï(¹²Ïíbuffer)¡£
+        // è°ƒç”¨ heap_insert æŠŠ ExecMaterializeSlot å¾—åˆ°çš„tupleå†™åˆ°pageé‡Œ(å…±äº«buffer)ã€‚
  	
-    ÕâÀïºöÂÔºÍÖ®Ç°ÏàÍ¬µÄstack¡£
+    è¿™é‡Œå¿½ç•¥å’Œä¹‹å‰ç›¸åŒçš„stackã€‚
 ```
     
 Thus, a tuple is the latest version of its row iff XMAX is invalid or
 
-### ×Ü½á
-Ç°ÈıÕÂÒ»Æğ¸ø¶ÁÕßÃè»æÁËÒ»¸öÂÖÀª£¬Õâ¸öÂÖÀªÕ¹Ê¾ÁËpg¶Ô¿Í»§¶ËÁ¬½Ó£¬ÍøÂçbuffer£¬¹²ÏíÄÚ´æ£¬Êı¾İÎÄ¼şbufferµÄ»ù±¾ÓÃ·¨ºÍheapµÄ»ù±¾×éÖ¯½á¹¹¡£Ò²¾ÍÊÇpg×÷ÎªÒ»¸öC/S½á¹¹µÄÊı¾İ´æÈ¡·şÎñÆ÷µÄ»ù±¾ÊµÏÖ¡£´ÓµÚËÄÕÂ¿ªÊ¼£¬½«¶Ôpg×÷ÎªÒ»¸ö¹ØÏµĞÍÊı¾İ¿â¹ÜÀíÏµÍ³×öÉîÈë·ÖÎö¡£
+### æ€»ç»“
+å‰ä¸‰ç« ä¸€èµ·ç»™è¯»è€…æç»˜äº†ä¸€ä¸ªè½®å»“ï¼Œè¿™ä¸ªè½®å»“å±•ç¤ºäº†pgå¯¹å®¢æˆ·ç«¯è¿æ¥ï¼Œç½‘ç»œbufferï¼Œå…±äº«å†…å­˜ï¼Œæ•°æ®æ–‡ä»¶bufferçš„åŸºæœ¬ç”¨æ³•å’Œheapçš„åŸºæœ¬ç»„ç»‡ç»“æ„ã€‚ä¹Ÿå°±æ˜¯pgä½œä¸ºä¸€ä¸ªC/Sç»“æ„çš„æ•°æ®å­˜å–æœåŠ¡å™¨çš„åŸºæœ¬å®ç°ã€‚ä»ç¬¬å››ç« å¼€å§‹ï¼Œå°†å¯¹pgä½œä¸ºä¸€ä¸ªå…³ç³»å‹æ•°æ®åº“ç®¡ç†ç³»ç»Ÿåšæ·±å…¥åˆ†æã€‚
