@@ -32,11 +32,11 @@ postgres.exe!main(int argc, char * * argv) Line 229	C
  	postgres.exe!main(int argc, char * * argv) Line 216	C
 ```
 
-支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE]，它 是接受客户端原始数据的buffer。
+支线剧情: 从 pq_getbyte 可以发现 pqcomm.c 里面有这么个全局变量 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE]，它 是接收客户端原始数据的buffer。
 
-回到主线:       qtype是用 pq_getbyte 从 接受buffer里获取的第一个字节。
+回到主线:       qtype是用 pq_getbyte 从 接收buffer里获取的第一个字节。
 ```
->	postgres.exe!SocketBackend(StringInfoData * inBuf) Line 375	C     根据 qtype 来决定之后的路线。如果 qtype==81(也就是'Q') 表示buffer里当前的命令是一个  simple query。  具体的协议规范可以postgresl-10 的官方文档的 52.7节 Message Formats 找到。
+>	postgres.exe!SocketBackend(StringInfoData * inBuf) Line 375	C     根据 qtype 来决定之后的路线。如果 qtype==81(也就是'Q') 表示buffer里当前的命令是一个  simple query。  具体的协议规范可以在postgresl-10 的官方文档的 52.7节 Message Formats 找到。
  	postgres.exe!ReadCommand(StringInfoData * inBuf) Line 514	C
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4095	C
  	postgres.exe!BackendRun(Port * port) Line 4362	C
@@ -118,7 +118,7 @@ List* parsetree_list
                                           -------------------------
 ```
 最后这个 SelectStmt 就是我们的查询语句 select * from table1 对应的语法树。用 (SelectStmt*)parsetree->stmt 来Watch 一下就可以大致知道里面有哪些内容。
-两句题外话。这种用nodetag来标记实际类型， 并以此为依据进行指针cast的做法是C语言项目里一种常用的面向对象编程方法。
+两句题外话：这种用nodetag来标记实际类型， 并以此为依据进行指针cast的做法是C语言项目里一种常用的面向对象编程方法。
 其实面向对象语言不外乎是在语法层面通过编译器或者VM替程序员向内存块里嵌入了这种表示类型的tag。
 
 接下来这个位置上两个目前比较重要的变量是 querytree_list 和 plantree_list。 
