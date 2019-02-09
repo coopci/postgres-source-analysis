@@ -2,25 +2,93 @@
 
 ### 执行器简介
 在postgres中，执行器(backend/executor)的工作是根据规划器(pg_plan_queries)返回的查询计划(Plan* PlannedStmt.planTree)执行查询。
-查询计划是个树形结构，每个节点被调用时都要返回下一个元组(tuple)，如果没有元组可返回，则返回NULL。如果一个节点还有子节点，那么它要先获取子节点的元组，然后这些自节点返回的元组作为数据源进行自己的运算后再返回-- 例如一个排序节点(struct Sort)要从它的子节点获取所有的元组然后排序，之后才能在每次被调用时从排好序的元组中返回下一个。 这样执行器执行树根的元素，其下各层子节点就会自动递归执行自己负责的部分，最终保证根节点的顺利执行。
+查询计划是个树形结构，这个树形结构中的每个节点被调用时都要返回下一个元组(tuple)，如果没有元组可返回，则返回NULL。如果一个节点有子节点，那么它要先获取子节点的元组，然后以这些子节点返回的元组作为数据源进行自己的运算后再返回-- 例如一个排序节点(struct Sort)要从它的子节点获取所有的元组然后排序，之后才能在每次被调用时从排好序的元组中返回下一个。 这样执行器执行树根的元素，其下各层子节点就会自动递归执行自己负责的部分，最终保证根节点的顺利执行。
 
+查询计划对于执行器来说是个只读的数据结构。但是随着执行进度推进，势必会使当前这次"执行"的内部状态发生改变——例如执行扫描表的计划时要记录当前扫描到了哪条记录。postgres的做法是为查询计划树建立一个"平行"的查询状态树(PlanState*) -- 每一个查询计划树中的节点都有一个对应的查询状态树的结点，而且查询状态树的结点记录(plan字段)自己对应哪个查询计划树的结点。
+例如ModifyTable计划节点对应的状态节点是ModifyTableState。
 
+把状态树作为一个和计划树独立的结构有一个重要的好处: 计划树在执行阶段是只读的，那么规划器可以很容易地维护查询语句和查询计划的cache。
 
-执行器本身对postgres的其他组建提供了四个接口: ExecutorStart, ExecutorRun, ExecutorFinish 和 ExecutorEnd。ProcessQuery 函数负责构建一个QueryDesc，并以QueryDesc为参数调用执行器的四个接口函数，上面提到的查询计划也是作为QueryDesc的字段传给执行器的。
+除了对应计划树中的每个节点都有一个状态节点之外，还有一个EState结构记录本次执行器执行的全局状态。
+
+ExecInitExpr
+
+执行器本身对postgres的其他组建提供了四个接口: ExecutorStart, ExecutorRun, ExecutorFinish 和 ExecutorEnd。 ProcessQuery 函数负责构建一个QueryDesc，并以QueryDesc为参数调用执行器的四个接口函数，上面提到的查询计划也是作为QueryDesc的plannedstmt字段传给执行器的。
 
 QueryDesc =plannedstmt=> (PlannedStmt*) =planTree=> (Plan *)
+ProcessQuery 函数封装了postgresql对执行器的调用:
+```
+QueryDesc  *queryDesc = CreateQueryDesc(...);
+    
+    
+ExecutorStart(queryDesc, 0);
+    standard_ExecutorStart
+        queryDesc->estate = CreateExecutorState();
+        InitPlan(QueryDesc)  
+            如果当前查询会向关系(relation)写数据，则要打开并以RowExclusiveLock模式锁住(heap_open)需要写的关系。这些关系记在plannedstmt->resultRelation里。
+             plannedstmt->rowMarks  estate->es_rowMarks
+            为每个子查询(plannedstmt->subplans)调用ExecInitNode构建状态树，并把构建好的状态树记到estate->es_subplanstates里。
+            调用ExecInitNode为主查询构建状态树，并记到queryDesc->planstate里。
+            ExecInitNode 根据不同的Plan(由NodeTag type字段标记)调用对应的 ExecInitXXXX 函数初始化对应的PlanState*。如果当前节点游子节点，那么ExecInitXXXX会对子节点递归调用ExecInitNode。
+            
+        
+ExecutorRun(queryDesc, ForwardScanDirection, 0L, true) 对状态树的根节点(queryDesc->planstate)调用ExecutePlan。
+    standard_ExecutorRun
+        ExecutePlan 
+            ExecProcNode   
+                node->ExecProcNode(node) 这个node是状态树的节点，不同类型的节点对应各自的ExecProcNode，是在上面提到的ExecInitNode中设置的。 例如 ModifyTableState 对应 ExecModifyTable。
+        
+设置 completionTag;
+ExecutorFinish(queryDesc);
+    standard_ExecutorFinish(queryDesc);
+        执行after trigger。
+ExecutorEnd(queryDesc);
+    standard_ExecutorEnd(queryDesc);
+        对执行状态树根节点调用ExecEndPlan。
+        释放estate。
+FreeQueryDesc(queryDesc);
+    释放snapshots。
+    释放queryDesc本身。
+```
+
+总结一下 —— postgresql里面不同查询的执行逻辑体现在不同 ExecXXX 函数中。对应查询状态树根节点的ExecXXX函数会递归调用子节点的ExecXXX函数。
 
 
-查询计划对于执行器来说是个只读的数据结构。但是随着执行进度推进，势必会使当前这次"执行"的内部状态发生改变——例如执行扫描表的计划时要记录当前扫描到了哪条记录。postgres的做法是为查询计划树建立一个"平行"的查询状态树(PlanState*) -- 每一个查询计划树中的节点都有一个对应的查询状态树的结点，而且查询状态树的结点记录(plan字段)自己对应哪个查询计划树的结点
+### ExecModifyTable
 
+本节后面要分析的insert, updata 和 delete语句在执行阶段都作为 ModifyTableState节点。它们都要调用子节点获取需要更改的数据，然后以这些数据为依据进行insert, update或delete。
+ExecModifyTable 的大致框架如下:
 
+```
+调用before statement triggers
 
+loop :
+    // node.mt_whichplan 已经在 ExecInitModifyTable里面被初始化为0。
+    对 node.mt_plans[node.mt_whichplan] 调用 ExecProcNode 获得下一行要改的数据 planSlot。
+    if (planSlot == NULL) {
+        // 当前node.mt_plans子节点已经没有进一步需要改的数据了。
+        if (node.mt_whichplan < 最后一个节点) {
+            // 让 node.mt_whichplan 指向下一个节点。
+            node.mt_whichplan++;
+        } else { 
+            // node.mt_whichplan 已经是 node.mt_plans最后一个节点。走到这里表示已经没有进一步需要改的数据了。
+            // 退出循环。
+            break;
+        }
+    }
+    
+    if (正在做update或delete) {
+        ExecGetJunkAttribute从planSlot中提取ctid。ctid就是要被update或者delete的row的"物理"位置。
+    }
+    对 planSlot 调用 ExecInsert, ExecUpdate 或者 ExecDelete。得到实际改变后的数据slot。
+    if ( slot!=NULL ) {
+        // 查询中带有RETURNNING子句。
+        return slot;
+    }
+}
 
-ExecutorStart
-    InitPlan(QueryDesc)
-        ExecInitNode 根据Plan*初始化对应的PlanState*
-ExecutorRun 对根节点调用ExecutePlan
-   
+```
+
 ### insert
 ```
 insert into table1(col1) values ('foo');
@@ -107,7 +175,7 @@ ExecInitModifyTable 构造 ModifyTableState -- 对 ModifyTable的plans中的Plan
 
 ModifyTableState =ps.plan=> (ModifyTable*)
                  \=mt_plans[0]=> (ResultState*)
-                 \=mt_nplans=> int (list_length(ModifyTable->plans))， 数组mt_plans中有几个元素，这个例子中是1，也就是说mt_plans中只有一个元素--ResultState
+                 \=mt_nplans=> int (list_length(ModifyTable->plans))， 数组mt_plans中有元素个数，在这个例子中是1，也就是说mt_plans中只有一个元素--ResultState
                  \=ps.ExecProcNode=> ExecModifyTable  
 
 下面来看看 ExecModifyTable 是如何递归调用 ExecResult
