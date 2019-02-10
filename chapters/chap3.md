@@ -89,13 +89,24 @@ loop :
 
 ```
 
+之后分别查看insert, delete和update具体是如何实现的。
+
+
 ### insert
 ```
 insert into table1(col1) values ('foo');
 ```
 
-初始化目标表:
+ExecInitNode 阶段:
 ```
+    postgres.exe!ExecInitFunc(ExprEvalStep * scratch, Expr * node, List * args, unsigned int funcid, unsigned int inputcollid, ExprState * state) Line 2159	C
+ 	postgres.exe!ExecInitExprRec(Expr * node, ExprState * state, unsigned __int64 * resv, bool * resnull) Line 885	C
+ 	postgres.exe!ExecBuildProjectionInfo(List * targetList, ExprContext * econtext, TupleTableSlot * slot, PlanState * parent, tupleDesc * inputDesc) Line 459	C
+ 	postgres.exe!ExecAssignProjectionInfo(PlanState * planstate, tupleDesc * inputDesc) Line 467	C
+>	postgres.exe!ExecInitResult(Result * node, EState * estate, int eflags) Line 226	C
+ 	postgres.exe!ExecInitNode(Plan * node, EState * estate, int eflags) Line 164	C
+ 	postgres.exe!ExecInitModifyTable(ModifyTable * node, EState * estate, int eflags) Line 2306	C
+ 	postgres.exe!ExecInitNode(Plan * node, EState * estate, int eflags) Line 174	C
 >	postgres.exe!InitPlan(QueryDesc * queryDesc, int eflags) Line 849	C
         // 用 getrelid 获得目标表的oid。 从getrelid的实现可以看出: resultRelations是以1为起始。
         // 用 heap_open 以RowExclusiveLock模式打开Relation。并放到estate->es_result_relations里面。
@@ -106,11 +117,22 @@ insert into table1(col1) values ('foo');
  	postgres.exe!PortalRun(PortalData * portal, long count, bool isTopLevel, bool run_once, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 803	C
  	postgres.exe!exec_simple_query(const char * query_string) Line 1130	C
         // 这里我们要弄清楚要插入的数据和目标表是如何表示的，首先是要插入的数据：
+        // 察看 (ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree) 的内容。
+        // 第一个参数(FuncExpr*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->data.ptr_value)->expr， 其中的 funcid 字段的值是1574
+        // SELECT  oid, * FROM pg_proc where oid = 1574 ==> nextval
+        
+        // 第二个参数 (Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->expr， 其中的consttype字段的值是1043
+        // select oid, * from pg_type where oid = 1043; ==> varchar
+        // 知道是varchar之后，用这个watch看看 (char*)((Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->expr)->constvalue + 4 这个字符串到底是什么，发现果然是"foo"。
+        
+        // ((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist 用来存放要插入到表中的数据。
+        
+        然后是插入的目标表:
         // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->rtable 里面记录着这个查询所可能用到的所有的表，在我们这个例子中只用到了一个表:
         ((RangeTblEntry*)((PlannedStmt *)(portal->stmts->head->data.ptr_value))->rtable->head->data.ptr_value)->relid 和 SELECT oid, * FROM pg_catalog.pg_class where relname='table1'; 得到oid正好吻合。
         
         // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->resultRelations 里面记录着insert的目标表在rttable中的索引，用这个watch可以看到它的值是1:
-        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->resultRelations->head->data.int_value，
+        // ((PlannedStmt *)(portal->stmts->head->data.ptr_value))->resultRelations->head->data.int_value
     
  	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
  	postgres.exe!BackendRun(Port * port) Line 4362	C
@@ -119,7 +141,7 @@ insert into table1(col1) values ('foo');
 
 ```
 
-execute
+ExecProcNode 阶段
 ```
 >	postgres.exe!heap_fill_tuple(tupleDesc * tupleDesc, unsigned __int64 * values, bool * isnull, char * data, unsigned __int64 data_size, unsigned short * infomask, unsigned char * bit) Line 345	C
         // 向下面三个地址中填入正确的数据，三个地址对应的数据 参考HeapTupleHeaderData结构和官方文档的table 66.4。
@@ -139,24 +161,8 @@ execute
  	postgres.exe!standard_ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 376	C
  	postgres.exe!ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 306	C
  	postgres.exe!ProcessQuery(PlannedStmt * plan, const char * sourceText, ParamListInfoData * params, QueryEnvironment * queryEnv, _DestReceiver * dest, char * completionTag) Line 166	C
- 	postgres.exe!PortalRunMulti(PortalData * portal, bool isTopLevel, bool setHoldSnapshot, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 1291	C
- 	postgres.exe!PortalRun(PortalData * portal, long count, bool isTopLevel, bool run_once, _DestReceiver * dest, _DestReceiver * altdest, char * completionTag) Line 803	C
- 	postgres.exe!exec_simple_query(const char * query_string) Line 1130	C
-            // 这里我们要弄清楚要插入的数据是如何表示的：
-            // 察看 (ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree) 的内容。
-            // 第一个参数(FuncExpr*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->data.ptr_value)->expr， 其中的 funcid 字段的值是1574
-            // SELECT  oid, * FROM pg_proc where oid = 1574 ==> nextval
-            
-            // 第二个参数 (Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->expr， 其中的consttype字段的值是1043
-            // select oid, * from pg_type where oid = 1043; ==> varchar
-            // 知道是varchar之后，用这个watch看看 (char*)((Const*)((TargetEntry*)((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist->head->next->data.ptr_value)->expr)->constvalue + 4 这个字符串到底是什么，发现果然是"foo"。
-            
-            // ((Result*)((ModifyTable*)(((PlannedStmt *)(portal->stmts->head->data.ptr_value))->planTree))->plans->head->data.ptr_value)->plan.targetlist 用来存放要插入到表中的数据。
-            
- 	postgres.exe!PostgresMain(int argc, char * * argv, const char * dbname, const char * username) Line 4155	C
- 	postgres.exe!BackendRun(Port * port) Line 4362	C
- 	postgres.exe!SubPostmasterMain(int argc, char * * argv) Line 4885	C
- 	postgres.exe!main(int argc, char * * argv) Line 216	C
+ 	...省略和之前相同的栈。 
+    
 
 ```
 postgresql以NodeTag为基础，构建了一套"动态"类型机制。如果严格用C语言风格的类型转换进行表示，就会像上面的watch表达式一样难以看懂，所以笔者发明了以下这种更易于人类阅读的方式来描述运行时的数据结构。这种表示形式没有严格区分指针和结构。
@@ -185,7 +191,7 @@ ModifyTableState =ps.plan=> (ModifyTable*)
  	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
  	postgres.exe!ExecModifyTable(PlanState * pstate) Line 2027	C
  	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
- 	这里忽略和之前相同的stack。
+ 	...省略和之前相同的栈。 
 ```
 
     
@@ -197,7 +203,7 @@ ModifyTableState =ps.plan=> (ModifyTable*)
  	postgres.exe!ExecInsert(ModifyTableState * mtstate, TupleTableSlot * slot, TupleTableSlot * planSlot, EState * estate, bool canSetTag) Line 529	C
         // 调用 heap_insert 把 ExecMaterializeSlot 得到的tuple写到page里(共享buffer)。
  	
-    这里忽略和之前相同的stack。
+    ...省略和之前相同的栈。 
 ```
     
 Thus, a tuple is the latest version of its row iff XMAX is invalid or
