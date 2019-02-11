@@ -142,6 +142,27 @@ ExecInitNode 阶段:
 ```
 
 ExecProcNode 阶段
+
+insert的执行阶段可以大致分成三个步骤:
+一、对node->mt_plans[node->mt_whichplan]调用ExecProcNode，得到要插入的数据slot。在我们这个例子里，node是个ModifyTableState*，node->mt_plans只有一个元素，这个元素是个ResultState*
+二、对slot调用ExecMaterializeSlot得到可以写到数据页(heap page)里的形式tuple。
+三、用heap_insert把tuple写到数据页里。
+
+下面分别来分析这三个步骤:
+一、得到slot:
+
+这需要调用 ExecResult
+```
+>	postgres.exe!ExecResult(PlanState * pstate) Line 77	C
+ 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
+ 	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
+ 	postgres.exe!ExecModifyTable(PlanState * pstate) Line 2027	C
+ 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
+ 	...省略和之前相同的栈。 
+```
+
+
+
 ```
 >	postgres.exe!heap_fill_tuple(tupleDesc * tupleDesc, unsigned __int64 * values, bool * isnull, char * data, unsigned __int64 data_size, unsigned short * infomask, unsigned char * bit) Line 345	C
         // 向下面三个地址中填入正确的数据，三个地址对应的数据 参考HeapTupleHeaderData结构和官方文档的table 66.4。
@@ -162,8 +183,6 @@ ExecProcNode 阶段
  	postgres.exe!ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 306	C
  	postgres.exe!ProcessQuery(PlannedStmt * plan, const char * sourceText, ParamListInfoData * params, QueryEnvironment * queryEnv, _DestReceiver * dest, char * completionTag) Line 166	C
  	...省略和之前相同的栈。 
-    
-
 ```
 postgresql以NodeTag为基础，构建了一套"动态"类型机制。如果严格用C语言风格的类型转换进行表示，就会像上面的watch表达式一样难以看懂，所以笔者发明了以下这种更易于人类阅读的方式来描述运行时的数据结构。这种表示形式没有严格区分指针和结构。
 用 "类型1 =字段a=> 类型2{值}" 来表示 类型1的字段a的数据类型是类型2，{}里面则是类型2的值。
@@ -184,15 +203,6 @@ ModifyTableState =ps.plan=> (ModifyTable*)
                  \=mt_nplans=> int (list_length(ModifyTable->plans))， 数组mt_plans中有元素个数，在这个例子中是1，也就是说mt_plans中只有一个元素--ResultState
                  \=ps.ExecProcNode=> ExecModifyTable  
 
-下面来看看 ExecModifyTable 是如何递归调用 ExecResult
-```
->	postgres.exe!ExecResult(PlanState * pstate) Line 77	C
- 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
- 	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
- 	postgres.exe!ExecModifyTable(PlanState * pstate) Line 2027	C
- 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
- 	...省略和之前相同的栈。 
-```
 
     
 ```
