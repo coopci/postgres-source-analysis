@@ -1,0 +1,13 @@
+psql -U postgres -p 6543
+
+select pg_terminate_backend(12380);
+
+select pg_backend_pid ();
+
+range table:
+parsenodes.h:  RangeTblEntry
+
+
+
+
+planstate->ps_ResultTupleSlot 
