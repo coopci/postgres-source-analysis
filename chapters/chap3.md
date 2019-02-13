@@ -93,6 +93,7 @@ loop :
 
 
 ### insert
+
 ```
 insert into table1(col1) values ('foo');
 ```
@@ -149,15 +150,26 @@ insert的执行阶段可以大致分成三个步骤:
 三、用heap_insert把tuple写到数据页里。
 
 下面分别来分析这三个步骤:
-一、得到slot:
+一、得到TupleTableSlot* slot:
 
 这需要调用 ExecResult
 ```
->	postgres.exe!ExecResult(PlanState * pstate) Line 77	C
+>	postgres.exe!ExecInterpExpr(ExprState * state, ExprContext * econtext, bool * isnull) Line 423	C
+        执行state->steps中的每个步骤。这个函数退出时，已经把各个expr的计算结果放到 state->resultslot->tts_values 和 state->resultslot->tts_isnull 了。
+ 	postgres.exe!ExecInterpExprStillValid(ExprState * state, ExprContext * econtext, bool * isNull) Line 1787	C
+ 	postgres.exe!ExecEvalExprSwitchContext(ExprState * state, ExprContext * econtext, bool * isNull) Line 303	C
+ 	postgres.exe!ExecProject(ProjectionInfo * projInfo) Line 343	C
+ 	postgres.exe!ExecResult(PlanState * pstate) Line 136	C
  	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
  	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
  	postgres.exe!ExecModifyTable(PlanState * pstate) Line 2027	C
  	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
+ 	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
+ 	postgres.exe!ExecutePlan(EState * estate, PlanState * planstate, bool use_parallel_mode, CmdType operation, bool sendTuples, unsigned __int64 numberTuples, ScanDirection direction, _DestReceiver * dest, bool execute_once) Line 1721	C
+ 	postgres.exe!standard_ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 376	C
+ 	postgres.exe!ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 306	C
+ 	postgres.exe!ProcessQuery(PlannedStmt * plan, const char * sourceText, ParamListInfoData * params, QueryEnvironment * queryEnv, _DestReceiver * dest, char * completionTag) Line 166	C
+
  	...省略和之前相同的栈。 
 ```
 
