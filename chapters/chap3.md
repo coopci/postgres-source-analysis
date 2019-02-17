@@ -102,9 +102,21 @@ ExecInitNode 阶段:
 ```
     postgres.exe!ExecInitFunc(ExprEvalStep * scratch, Expr * node, List * args, unsigned int funcid, unsigned int inputcollid, ExprState * state) Line 2159	C
  	postgres.exe!ExecInitExprRec(Expr * node, ExprState * state, unsigned __int64 * resv, bool * resnull) Line 885	C
+        根据node->type构造对应的ExprEvalStep，并且用ExprEvalPushStep把构造出来的ExprEvalStep放到state->steps数组里。
+    
  	postgres.exe!ExecBuildProjectionInfo(List * targetList, ExprContext * econtext, TupleTableSlot * slot, PlanState * parent, tupleDesc * inputDesc) Line 459	C
+        execExpr.c:349
+        ExecInitExprSlots(state, (Node *) targetList);
+        
+        对targetlist里的每一个TargetEntry 调用 ExecInitExprRec，还要向state->steps数组里 增加一个 EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作。
+        EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作的作用是把 ExprState的计算结果(resvalue/resnull)放到对应resultslot的列上。
+        
  	postgres.exe!ExecAssignProjectionInfo(PlanState * planstate, tupleDesc * inputDesc) Line 467	C
+        用 ExecBuildProjectionInfo 初始化 planstate->ps_ProjInfo
+        planstate->ps_ResultTupleSlot
 >	postgres.exe!ExecInitResult(Result * node, EState * estate, int eflags) Line 226	C
+        调用ExecInitResultTupleSlotTL初始化planstate->ps_ResultTupleSlot
+        
  	postgres.exe!ExecInitNode(Plan * node, EState * estate, int eflags) Line 164	C
  	postgres.exe!ExecInitModifyTable(ModifyTable * node, EState * estate, int eflags) Line 2306	C
  	postgres.exe!ExecInitNode(Plan * node, EState * estate, int eflags) Line 174	C
