@@ -4,16 +4,17 @@
 在postgres中，执行器(backend/executor)的工作是根据规划器(pg_plan_queries)返回的查询计划(Plan* PlannedStmt.planTree)执行查询。
 查询计划是个树形结构，这个树形结构中的每个节点被调用时都要返回下一个元组(tuple)，如果没有元组可返回，则返回NULL。如果一个节点有子节点，那么它要先获取子节点的元组，然后以这些子节点返回的元组作为数据源进行自己的运算后再返回-- 例如一个排序节点(struct Sort)要从它的子节点获取所有的元组然后排序，之后才能在每次被调用时从排好序的元组中返回下一个。 这样执行器执行树根的元素，其下各层子节点就会自动递归执行自己负责的部分，最终保证根节点的顺利执行。
 
-查询计划对于执行器来说是个只读的数据结构。但是随着执行进度推进，势必会使当前这次"执行"的内部状态发生改变——例如执行扫描表的计划时要记录当前扫描到了哪条记录。postgres的做法是为查询计划树建立一个"平行"的查询状态树(PlanState*) -- 每一个查询计划树中的节点都有一个对应的查询状态树的结点，而且查询状态树的结点记录(plan字段)自己对应哪个查询计划树的结点。
-例如ModifyTable计划节点对应的状态节点是ModifyTableState。
+查询计划对于执行器来说是个只读的数据结构。但是随着执行进度推进，势必会使当前这次"执行"的内部状态发生改变——例如执行扫描表的计划时要记录当前扫描到了哪条记录。postgres的做法是为查询计划树建立一个"平行"的查询状态树(PlanState*) -- 每一个查询计划树中的节点都有一个对应的查询状态树的结点，而且查询状态树的结点记录(plan字段)自己对应哪个查询计划树的结点。例如ModifyTable计划节点对应的状态节点是ModifyTableState。
+不过有一种特殊情况: Expr 对应的状态节点 ExprState 不是个和Expr平行的树状结构，而是用一个数组(steps，数组元素的类型是ExprEvalStep)记录要计算的表达式，从Expr生成对应的ExprState的这部分工作由ExecInitExpr函数完成。这样做的目的在于: 
+    1. 执行大多数Expr子节点的计算量比较小——比遍历树结构的开销大不了多少。不遍历树状结构就可以把计算能力更有效地用在处理用户需求(计算表达式)上面而不是用在内耗(遍历树结构)上。
+    2. 避免递归调用，也就减少了栈深度和函数调用的次数。
+    3. 平坦的数组结构既能支持快速的解释执行又能支持编译执行。
 
 把状态树作为一个和计划树独立的结构有一个重要的好处: 计划树在执行阶段是只读的，那么规划器可以很容易地维护查询语句和查询计划的cache。
 
 除了对应计划树中的每个节点都有一个状态节点之外，还有一个EState结构记录本次执行器执行的全局状态。
 
-ExecInitExpr
-
-执行器本身对postgres的其他组建提供了四个接口: ExecutorStart, ExecutorRun, ExecutorFinish 和 ExecutorEnd。 ProcessQuery 函数负责构建一个QueryDesc，并以QueryDesc为参数调用执行器的四个接口函数，上面提到的查询计划也是作为QueryDesc的plannedstmt字段传给执行器的。
+执行器作为一个整体对postgres的其他模块提供了四个接口: ExecutorStart, ExecutorRun, ExecutorFinish 和 ExecutorEnd。 ProcessQuery 函数负责构建一个QueryDesc，并以QueryDesc为参数调用执行器的四个接口函数，上面提到的查询计划也是作为QueryDesc的plannedstmt字段传给执行器的。
 
 QueryDesc =plannedstmt=> (PlannedStmt*) =planTree=> (Plan *)
 ProcessQuery 函数封装了postgresql对执行器的调用:
@@ -103,13 +104,15 @@ ExecInitNode 阶段:
     postgres.exe!ExecInitFunc(ExprEvalStep * scratch, Expr * node, List * args, unsigned int funcid, unsigned int inputcollid, ExprState * state) Line 2159	C
  	postgres.exe!ExecInitExprRec(Expr * node, ExprState * state, unsigned __int64 * resv, bool * resnull) Line 885	C
         根据node->type构造对应的ExprEvalStep，并且用ExprEvalPushStep把构造出来的ExprEvalStep放到state->steps数组里。
-    
+        子节点有可能递归调用ExecInitExprRec，例如ExecInitFunc会对每个参数递归调用ExecInitExprRec。
  	postgres.exe!ExecBuildProjectionInfo(List * targetList, ExprContext * econtext, TupleTableSlot * slot, PlanState * parent, tupleDesc * inputDesc) Line 459	C
         execExpr.c:349
         ExecInitExprSlots(state, (Node *) targetList);
         
-        对targetlist里的每一个TargetEntry 调用 ExecInitExprRec，还要向state->steps数组里 增加一个 EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作。
+        ProjectionInfo.pi_state的类型是ExprState，这里要对
+        对targetlist里的每一个TargetEntry 调用 ExecInitExprRec，还要在每次调用ExecInitExprRec后向ProjectionInfo.pi_state.steps数组里 增加一个 EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作。
         EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作的作用是把 ExprState的计算结果(resvalue/resnull)放到对应resultslot的列上。
+        这样，ProjectionInfo.pi_state.steps里面就包含了要得到一个tuple所需要的所有步骤。在执行阶段，顺序执行其中的每个步骤之后，就填好了tuple的每个字段。
         
  	postgres.exe!ExecAssignProjectionInfo(PlanState * planstate, tupleDesc * inputDesc) Line 467	C
         用 ExecBuildProjectionInfo 初始化 planstate->ps_ProjInfo
@@ -154,6 +157,18 @@ ExecInitNode 阶段:
 
 ```
 
+```
+>	postgres.exe!ExecInitExprRec(Expr * node, ExprState * state, unsigned __int64 * resv, bool * resnull) Line 720	C
+        用datumGetSize(scratch.d.constval.value, 0, -1)可以看到总长度是7，7=4(varlena.vl_len_本身的长度 )+3("foo"的长度)
+ 	postgres.exe!ExecBuildProjectionInfo(List * targetList, ExprContext * econtext, TupleTableSlot * slot, PlanState * parent, tupleDesc * inputDesc) Line 459	C
+    
+```
+    
+    
+enum ExprEvalOp execExpr.h
+EEOP_FUNCEXPR_STRICT，EEOP_ASSIGN_TMP，EEOP_CONST，EEOP_ASSIGN_TMP，EEOP_CONST，EEOP_ASSIGN_TMP_MAKE_RO，EEOP_DONE
+
+
 ExecProcNode 阶段
 
 insert的执行阶段可以大致分成三个步骤:
@@ -167,7 +182,7 @@ insert的执行阶段可以大致分成三个步骤:
 这需要调用 ExecResult
 ```
 >	postgres.exe!ExecInterpExpr(ExprState * state, ExprContext * econtext, bool * isnull) Line 423	C
-        执行state->steps中的每个步骤。这个函数退出时，已经把各个expr的计算结果放到 state->resultslot->tts_values 和 state->resultslot->tts_isnull 了。
+        执行state->steps中的每个步骤，把计算结果放到state->resultslot->tts_values 和 state->resultslot->tts_isnull 中对应的位置。
  	postgres.exe!ExecInterpExprStillValid(ExprState * state, ExprContext * econtext, bool * isNull) Line 1787	C
  	postgres.exe!ExecEvalExprSwitchContext(ExprState * state, ExprContext * econtext, bool * isNull) Line 303	C
  	postgres.exe!ExecProject(ProjectionInfo * projInfo) Line 343	C
@@ -181,7 +196,6 @@ insert的执行阶段可以大致分成三个步骤:
  	postgres.exe!standard_ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 376	C
  	postgres.exe!ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 306	C
  	postgres.exe!ProcessQuery(PlannedStmt * plan, const char * sourceText, ParamListInfoData * params, QueryEnvironment * queryEnv, _DestReceiver * dest, char * completionTag) Line 166	C
-
  	...省略和之前相同的栈。 
 ```
 
@@ -200,12 +214,6 @@ insert的执行阶段可以大致分成三个步骤:
  	postgres.exe!ExecMaterializeSlot(TupleTableSlot * slot) Line 806	C
  	postgres.exe!ExecInsert(ModifyTableState * mtstate, TupleTableSlot * slot, TupleTableSlot * planSlot, EState * estate, bool canSetTag) Line 283	C
  	postgres.exe!ExecModifyTable(PlanState * pstate) Line 2161	C
- 	postgres.exe!ExecProcNodeFirst(PlanState * node) Line 446	C
- 	postgres.exe!ExecProcNode(PlanState * node) Line 238	C
- 	postgres.exe!ExecutePlan(EState * estate, PlanState * planstate, bool use_parallel_mode, CmdType operation, bool sendTuples, unsigned __int64 numberTuples, ScanDirection direction, _DestReceiver * dest, bool execute_once) Line 1721	C
- 	postgres.exe!standard_ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 376	C
- 	postgres.exe!ExecutorRun(QueryDesc * queryDesc, ScanDirection direction, unsigned __int64 count, bool execute_once) Line 306	C
- 	postgres.exe!ProcessQuery(PlannedStmt * plan, const char * sourceText, ParamListInfoData * params, QueryEnvironment * queryEnv, _DestReceiver * dest, char * completionTag) Line 166	C
  	...省略和之前相同的栈。 
 ```
 postgresql以NodeTag为基础，构建了一套"动态"类型机制。如果严格用C语言风格的类型转换进行表示，就会像上面的watch表达式一样难以看懂，所以笔者发明了以下这种更易于人类阅读的方式来描述运行时的数据结构。这种表示形式没有严格区分指针和结构。
