@@ -1,14 +1,15 @@
 ﻿## 第三章 执行器 和 insert, delete, update的执行 ##
 
 ### 执行器简介
-在postgres中，执行器(backend/executor)的工作是根据规划器(pg_plan_queries)返回的查询计划(Plan* PlannedStmt.planTree)执行查询。
-查询计划是个树形结构，这个树形结构中的每个节点被调用时都要返回下一个元组(tuple)，如果没有元组可返回，则返回NULL。如果一个节点有子节点，那么它要先获取子节点的元组，然后以这些子节点返回的元组作为数据源进行自己的运算后再返回-- 例如一个排序节点(struct Sort)要从它的子节点获取所有的元组然后排序，之后才能在每次被调用时从排好序的元组中返回下一个。 这样执行器执行树根的元素，其下各层子节点就会自动递归执行自己负责的部分，最终保证根节点的顺利执行。
+在postgres中，执行器(backend/executor)的工作是根据规划器(pg_plan_queries)返回的查询计划(Plan* PlannedStmt.planTree)执行查询(这里说的查询不仅包括读操作，也包括写操作，例如insert, delete, update)。
+查询计划是个树形结构，这个树形结构中的每个节点被调用时都要返回下一个元组(tuple)，如果没有元组可返回，则返回NULL。如果一个节点有子节点，那么它要先获取子节点的元组，然后以这些子节点返回的元组作为数据源进行自己的运算后再返回--例如一个排序节点(struct Sort)要从它的子节点获取所有的元组然后排序，之后才能在每次被调用时从排好序的元组中返回下一个。 这样执行器执行树根的元素，其下各层子节点就会自动递归执行自己负责的部分，最终保证根节点的顺利执行。
 
 查询计划对于执行器来说是个只读的数据结构。但是随着执行进度推进，势必会使当前这次"执行"的内部状态发生改变——例如执行扫描表的计划时要记录当前扫描到了哪条记录。postgres的做法是为查询计划树建立一个"平行"的查询状态树(PlanState*) -- 每一个查询计划树中的节点都有一个对应的查询状态树的结点，而且查询状态树的结点记录(plan字段)自己对应哪个查询计划树的结点。例如ModifyTable计划节点对应的状态节点是ModifyTableState。
 不过有一种特殊情况: Expr 对应的状态节点 ExprState 不是个和Expr平行的树状结构，而是用一个数组(steps，数组元素的类型是ExprEvalStep)记录要计算的表达式，从Expr生成对应的ExprState的这部分工作由ExecInitExpr函数完成。这样做的目的在于: 
     1. 执行大多数Expr子节点的计算量比较小——比遍历树结构的开销大不了多少。不遍历树状结构就可以把计算能力更有效地用在处理用户需求(计算表达式)上面而不是用在内耗(遍历树结构)上。
     2. 避免递归调用，也就减少了栈深度和函数调用的次数。
     3. 平坦的数组结构既能支持快速的解释执行又能支持编译执行。
+ExprState的执行过程大致是执行state->steps中的每个步骤(EEOP_ASSIGN_TMP，EEOP_CONST，EEOP_ASSIGN_TMP_MAKE_RO和EEOP_DONE类型的步骤 除外)，把计算结果放到state->resultslot->tts_values 和 state->resultslot->tts_isnull 中。EEOP_ASSIGN_TMP，EEOP_CONST和EEOP_ASSIGN_TMP_MAKE_RO类型的步骤负责把state->resultslot->tts_values 和 state->resultslot->tts_isnull 的值放到(ExprState* state)->resultslot对应的列上
 
 把状态树作为一个和计划树独立的结构有一个重要的好处: 计划树在执行阶段是只读的，那么规划器可以很容易地维护查询语句和查询计划的cache。
 
@@ -22,7 +23,7 @@ ProcessQuery 函数封装了postgresql对执行器的调用:
 QueryDesc  *queryDesc = CreateQueryDesc(...);
     
     
-ExecutorStart(queryDesc, 0);
+ExecutorStart(queryDesc, 0);   这个阶段的目的是构建和查询树平行的执行状态树。
     standard_ExecutorStart
         queryDesc->estate = CreateExecutorState();
         InitPlan(QueryDesc)  
@@ -33,7 +34,7 @@ ExecutorStart(queryDesc, 0);
             ExecInitNode 根据不同的Plan(由NodeTag type字段标记)调用对应的 ExecInitXXXX 函数初始化对应的PlanState*。如果当前节点游子节点，那么ExecInitXXXX会对子节点递归调用ExecInitNode。
             
         
-ExecutorRun(queryDesc, ForwardScanDirection, 0L, true) 对状态树的根节点(queryDesc->planstate)调用ExecutePlan。
+ExecutorRun(queryDesc, ForwardScanDirection, 0L, true) 对状态树的根节点(queryDesc->planstate)调用ExecutePlan。这个阶段是真正按查询树执行查询。
     standard_ExecutorRun
         ExecutePlan 
             ExecProcNode   
@@ -102,21 +103,27 @@ insert into table1(col1) values ('foo');
 ExecInitNode 阶段:
 ```
     postgres.exe!ExecInitFunc(ExprEvalStep * scratch, Expr * node, List * args, unsigned int funcid, unsigned int inputcollid, ExprState * state) Line 2159	C
+        初始化调用函数的结点，在我们这个例子，要调用的函数是nextval。
  	postgres.exe!ExecInitExprRec(Expr * node, ExprState * state, unsigned __int64 * resv, bool * resnull) Line 885	C
         根据node->type构造对应的ExprEvalStep，并且用ExprEvalPushStep把构造出来的ExprEvalStep放到state->steps数组里。
         子节点有可能递归调用ExecInitExprRec，例如ExecInitFunc会对每个参数递归调用ExecInitExprRec。
+        
  	postgres.exe!ExecBuildProjectionInfo(List * targetList, ExprContext * econtext, TupleTableSlot * slot, PlanState * parent, tupleDesc * inputDesc) Line 459	C
         execExpr.c:349
+        这个函数的作用是构建一个ProjectionInfo *projInfo。
         ExecInitExprSlots(state, (Node *) targetList);
         
         ProjectionInfo.pi_state的类型是ExprState，这里要对
         对targetlist里的每一个TargetEntry 调用 ExecInitExprRec，还要在每次调用ExecInitExprRec后向ProjectionInfo.pi_state.steps数组里 增加一个 EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作。
-        EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作的作用是把 ExprState的计算结果(resvalue/resnull)放到对应resultslot的列上。
+        EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作的作用是把 ExprState的计算结果(resvalue/resnull)放到(ExprState* state)->resultslot对应的列上。
         这样，ProjectionInfo.pi_state.steps里面就包含了要得到一个tuple所需要的所有步骤。在执行阶段，顺序执行其中的每个步骤之后，就填好了tuple的每个字段。
+        
+        所以在这里为Result节点的targetlist中的元素建立ExprState后，和ResultState节点的关系是: ResultState.(PlanState)ps.(ProjectionInfo *)ps_ProjInfo->(ExprState)pi_state
         
  	postgres.exe!ExecAssignProjectionInfo(PlanState * planstate, tupleDesc * inputDesc) Line 467	C
         用 ExecBuildProjectionInfo 初始化 planstate->ps_ProjInfo
         planstate->ps_ResultTupleSlot
+        
 >	postgres.exe!ExecInitResult(Result * node, EState * estate, int eflags) Line 226	C
         调用ExecInitResultTupleSlotTL初始化planstate->ps_ResultTupleSlot
         
@@ -157,9 +164,20 @@ ExecInitNode 阶段:
 
 ```
 
+在我们这个简单的例子中，Result的targetlist中只有两种类型的子节点，函数(T_FuncExpr，而且nextval是个无参数的函数)和常数(T_Const)。函数的情况在上面已经看过了，现在来看常量的情况:
 ```
 >	postgres.exe!ExecInitExprRec(Expr * node, ExprState * state, unsigned __int64 * resv, bool * resnull) Line 720	C
-        用datumGetSize(scratch.d.constval.value, 0, -1)可以看到总长度是7，7=4(varlena.vl_len_本身的长度 )+3("foo"的长度)
+            case T_Const:
+			{
+				Const	   *con = (Const *) node;
+
+				scratch.opcode = EEOP_CONST;
+				scratch.d.constval.value = con->constvalue;  <== 这个就是常量字符串"foo"。
+				scratch.d.constval.isnull = con->constisnull;
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+            在这里用datumGetSize(scratch.d.constval.value, 0, -1)可以看到数据的总长度是7，7=4(varlena.vl_len_本身的长度 )+3("foo"的长度)
  	postgres.exe!ExecBuildProjectionInfo(List * targetList, ExprContext * econtext, TupleTableSlot * slot, PlanState * parent, tupleDesc * inputDesc) Line 459	C
     
 ```
