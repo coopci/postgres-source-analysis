@@ -2,6 +2,8 @@
 
 1.1  走马观花一番 select * from table1;
 
+
+
 本节向读者展示pg服务器在处理一个简单的 select * 查询的过程所包含的主要步骤，让读者在源代码层次对大框架产生初步印象。功能模块角度的大框架可以从官方文档的第五十章找到。
 
 手工操作: 用客户端程序 psql  建立一个新连接: 
@@ -10,6 +12,17 @@ psql -U postgres -p 6543
 ```
 
 这里 pg主进程 accept一个新的tcp连接，并fork一个子进程处理这个连接的后续请求。主进程回到 listen, accept, fork 循环。
+
+创建实验用的表table1:
+```
+CREATE TABLE public.table1
+(
+    id bigserial NOT NULL ,
+    col1 character varying(64) COLLATE pg_catalog."default",
+    CONSTRAINT table1_pkey PRIMARY KEY (id)
+)
+```
+
 
 ```
 postgres.exe!BackendStartup(Port * port) Line 4016	C        ==> pid = backend_forkexec(port); 我们需要记住这个pid， 后面要把debugger attach到这进程上。
