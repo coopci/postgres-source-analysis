@@ -107,6 +107,10 @@ ExecInitNode 阶段:
  	postgres.exe!ExecInitExprRec(Expr * node, ExprState * state, unsigned __int64 * resv, bool * resnull) Line 885	C
         根据node->type构造对应的ExprEvalStep，并且用ExprEvalPushStep把构造出来的ExprEvalStep放到state->steps数组里。
         子节点有可能递归调用ExecInitExprRec，例如ExecInitFunc会对每个参数递归调用ExecInitExprRec。
+        注意这里有:
+        scratch.resvalue = resv;
+        scratch.resnull = resnull;
+        给scratch(scratch就是要得到的step)指定了把计算结果存到哪个地址。因为ExecBuildProjectionInfo给定了&state->resvalue和&state->resnull，所以scratch会把计算结果放到&state->resvalue和&state->resnull。
         
  	postgres.exe!ExecBuildProjectionInfo(List * targetList, ExprContext * econtext, TupleTableSlot * slot, PlanState * parent, tupleDesc * inputDesc) Line 459	C
         execExpr.c:349
@@ -118,7 +122,7 @@ ExecInitNode 阶段:
         EEOP_ASSIGN_TMP或者EEOP_ASSIGN_TMP_MAKE_RO操作的作用是把 ExprState的计算结果(resvalue/resnull)放到(ExprState* state)->resultslot对应的列上。
         这样，ProjectionInfo.pi_state.steps里面就包含了要得到一个tuple所需要的所有步骤。在执行阶段，顺序执行其中的每个步骤之后，就填好了tuple的每个字段。
         
-        所以在这里为Result节点的targetlist中的元素建立ExprState后，和ResultState节点的关系是: ResultState.(PlanState)ps.(ProjectionInfo *)ps_ProjInfo->(ExprState)pi_state
+        所以在这里为Result节点的targetlist中的元素建立的ExprState和ResultState节点的关系是: ResultState.(PlanState)ps.(ProjectionInfo *)ps_ProjInfo->(ExprState)pi_state
         
  	postgres.exe!ExecAssignProjectionInfo(PlanState * planstate, tupleDesc * inputDesc) Line 467	C
         用 ExecBuildProjectionInfo 初始化 planstate->ps_ProjInfo
@@ -183,9 +187,86 @@ ExecInitNode 阶段:
 ```
     
     
-enum ExprEvalOp execExpr.h
-EEOP_FUNCEXPR_STRICT，EEOP_ASSIGN_TMP，EEOP_CONST，EEOP_ASSIGN_TMP，EEOP_CONST，EEOP_ASSIGN_TMP_MAKE_RO，EEOP_DONE
 
+ExecBuildProjectionInfo当返回之前，state->steps中有5个step(step_lens=5)
+steps[0] opcode=EEOP_FUNCEXPR_STRICT(18), op->d.func.finfo记录要调用的函数的信息，其中op->d.func.finfo.fn_oid字段对应系统表pg_catalog.pg_proc的oid字段
+    ```
+    EEO_CASE(EEOP_FUNCEXPR_STRICT)
+		{
+			FunctionCallInfo fcinfo = op->d.func.fcinfo_data;
+			bool	   *argnull = fcinfo->argnull;
+			int			argno;
+			Datum		d;
+
+			/* strict function, so check for NULL args */
+			for (argno = 0; argno < op->d.func.nargs; argno++)
+			{
+				if (argnull[argno])
+				{
+					*op->resnull = true;
+					goto strictfail;
+				}
+			}
+			fcinfo->isnull = false;
+			d = op->d.func.fn_addr(fcinfo); //  d.func.fn_addr是op->d.func.finfo.fn_oid对应的C函数的地址。
+			*op->resvalue = d;              // 之前已经说明过op->resvalue和state->resvalue是同一个地址，相当于赋值给了state->resvalue。  
+			*op->resnull = fcinfo->isnull;  // 之前已经说明过op->resnull和state->resnull是同一个地址，相当于赋值给了state->resnull。
+            // 因为后面的EEOP_ASSIGN_TMP只能把state里面的数据赋值到resultslot->tts_XXX里面，这里把op->resXXX指向state->resXXX。
+            // 不能直接 state->resvalue = d 和 state->resnull = fcinfo->isnull，是因为在其他情况下有可能需要把结果存到其他地方而不是state上。
+            
+	strictfail:
+			EEO_NEXT();
+		}
+     ```
+steps[1] opcode=EEOP_ASSIGN_TMP(14)，
+    把上一步的计算结果赋值到resultslot->tts_values和resultslot->tts_isnull 相应的位置，位置由d.assign_tmp.resultnum给出。
+    ```
+    EEO_CASE(EEOP_ASSIGN_TMP)
+		{
+			int			resultnum = op->d.assign_tmp.resultnum;
+
+			resultslot->tts_values[resultnum] = state->resvalue;
+			resultslot->tts_isnull[resultnum] = state->resnull;
+
+			EEO_NEXT();
+		}
+    ```
+
+steps[2] opcode=EEOP_CONST(16)，
+    把op->d.constval复制给state->resvalue和state->resnull，以便下一步EEOP_ASSIGN_TMP_MAKE_RO能把这个常量复制给resultslot。
+    ```
+    EEO_CASE(EEOP_CONST)
+		{
+			*op->resnull = op->d.constval.isnull;
+			*op->resvalue = op->d.constval.value;
+
+			EEO_NEXT();
+		}
+    ```
+steps[3] opcode=EEOP_ASSIGN_TMP_MAKE_RO(15)，
+    ```
+    EEO_CASE(EEOP_ASSIGN_TMP_MAKE_RO)
+		{
+			int			resultnum = op->d.assign_tmp.resultnum;
+
+			resultslot->tts_isnull[resultnum] = state->resnull;
+			if (!resultslot->tts_isnull[resultnum])
+				resultslot->tts_values[resultnum] =
+					MakeExpandedObjectReadOnlyInternal(state->resvalue); //只是比EEOP_ASSIGN_TMP多了这个步骤。
+			else
+				resultslot->tts_values[resultnum] = state->resvalue;
+
+			EEO_NEXT();
+		}
+    ```
+steps[4] opcode=EEOP_DONE  表示这是最后一个step。
+    ```
+    EEO_CASE(EEOP_DONE)
+		{
+			goto out;  结束ExecInterpExpr函数。
+		}
+    ```
+step的opcode除了上面5个类型之外，完整的列表 enum ExprEvalOp 定义在 execExpr.h 。
 
 ExecProcNode 阶段
 
